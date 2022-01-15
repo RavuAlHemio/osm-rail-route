@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::f64::consts::PI;
 use std::fs::File;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -9,11 +10,42 @@ use osmpbfreader::{Node, NodeId, OsmPbfReader, Tags, Way};
 
 #[derive(Clone, Debug, Parser, PartialEq)]
 struct Opts {
+    #[clap(subcommand)] mode: OptsMode,
+}
+impl Opts {
+    pub fn osm_path(&self) -> &PathBuf {
+        match &self.mode {
+            OptsMode::Route(r) => &r.osm_path,
+            OptsMode::DumpWays(dw) => &dw.osm_path,
+            OptsMode::LongestPath(lp) => &lp.osm_path,
+        }
+    }
+}
+#[derive(Clone, Debug, Parser, PartialEq)]
+enum OptsMode {
+    Route(RouteOpts),
+    DumpWays(DumpWaysOpts),
+    LongestPath(LongestPathOpts),
+}
+#[derive(Clone, Debug, Parser, PartialEq)]
+struct RouteOpts {
     pub osm_path: PathBuf,
     pub start_lat: f64,
     pub start_lon: f64,
     pub dest_lat: f64,
     pub dest_lon: f64,
+    #[clap(short, long, default_value("30.0"))] pub max_bearing_diff_deg: f64,
+    #[clap(short, long)] pub debug_bearing: bool,
+}
+#[derive(Clone, Debug, Parser, PartialEq)]
+struct DumpWaysOpts {
+    pub osm_path: PathBuf,
+}
+#[derive(Clone, Debug, Parser, PartialEq)]
+struct LongestPathOpts {
+    pub osm_path: PathBuf,
+    #[clap(short, long, default_value("30.0"))] pub max_bearing_diff_deg: f64,
+    #[clap(short, long)] pub debug_bearing: bool,
 }
 
 
@@ -22,6 +54,26 @@ struct PathSegment<'a> {
     pub start_node: &'a Node,
     pub end_node: &'a Node,
     pub distance: f64,
+}
+impl<'a> PathSegment<'a> {
+    pub fn bearing(&self) -> f64 {
+        // L is longitude, θ is latitude
+        // ∆L = Lb - La
+        // X = cos θb * sin ∆L
+        // Y = cos θa * sin θb – sin θa * cos θb * cos ∆L
+
+        let lat_a = self.start_node.lat() * PI / 180.0;
+        let lat_b = self.end_node.lat() * PI / 180.0;
+        let lon_a = self.start_node.lon() * PI / 180.0;
+        let lon_b = self.end_node.lon() * PI / 180.0;
+
+        let lon_delta = lon_b - lon_a;
+        let x = lat_b.cos() * lon_delta.sin();
+        let y = lat_a.cos() * lat_b.sin() - lat_a.sin() * lat_b.cos() * lon_delta.cos();
+
+        // yeah, the variable names are swapped here
+        x.atan2(y)
+    }
 }
 
 
@@ -86,6 +138,14 @@ impl<'a> PathChain<'a> {
         }
         false
     }
+
+    pub fn start_node(&self) -> Option<&Node> {
+        self.segments().first().map(|s| s.start_node)
+    }
+
+    pub fn end_node(&self) -> Option<&Node> {
+        self.segments().last().map(|s| s.end_node)
+    }
 }
 
 
@@ -93,6 +153,7 @@ impl<'a> PathChain<'a> {
 struct DiscoveredPath<'a> {
     pub current_chains: Vec<PathChain<'a>>,
     pub current_node: &'a Node,
+    pub total_distance: f64,
     pub heuristic: f64,
 }
 impl<'a> DiscoveredPath<'a> {
@@ -112,6 +173,22 @@ impl<'a> DiscoveredPath<'a> {
         }
         count
     }
+
+    pub fn to_nodes(&self) -> Vec<&Node> {
+        let mut ret = Vec::new();
+        let all_segments = self.current_chains
+            .iter()
+            .flat_map(|chain| chain.segments().iter());
+        let mut first_segment = true;
+        for segment in all_segments {
+            if first_segment {
+                ret.push(segment.start_node);
+                first_segment = false;
+            }
+            ret.push(segment.end_node);
+        }
+        ret
+    }
 }
 
 
@@ -128,15 +205,20 @@ fn make_fake_node(lat: f64, lon: f64) -> Node {
 
 
 #[allow(non_snake_case)]
-fn geo_distance_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+fn geo_distance_meters(lat1_deg: f64, lon1_deg: f64, lat2_deg: f64, lon2_deg: f64) -> f64 {
+    let lat1_rad = lat1_deg * PI / 180.0;
+    let lat2_rad = lat2_deg * PI / 180.0;
+    let lon1_rad = lon1_deg * PI / 180.0;
+    let lon2_rad = lon2_deg * PI / 180.0;
+
     // Vincenty's formulae
     let a = 6378137.0; // WGS84
     let f = 1.0/298.257223563; // WGS84
     let b = (1.0 - f) * a;
 
-    let U1 = ((1.0 - f) * lat1.tan()).atan();
-    let U2 = ((1.0 - f) * lat2.tan()).atan();
-    let L = lon2 - lon1;
+    let U1 = ((1.0 - f) * lat1_rad.tan()).atan();
+    let U2 = ((1.0 - f) * lat2_rad.tan()).atan();
+    let L = lon2_rad - lon1_rad;
 
     let mut lambda = L;
     let mut cos2_alpha;
@@ -184,7 +266,12 @@ fn geo_distance_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     s
 }
 
-fn sphere_distance_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+fn sphere_distance_meters(lat1_deg: f64, lon1_deg: f64, lat2_deg: f64, lon2_deg: f64) -> f64 {
+    let lat1_rad = lat1_deg * PI / 180.0;
+    let lat2_rad = lat2_deg * PI / 180.0;
+    let lon1_rad = lon1_deg * PI / 180.0;
+    let lon2_rad = lon2_deg * PI / 180.0;
+
     // haversine formula
     let a = 6378137.0; // WGS84
     let f = 1.0/298.257223563; // WGS84
@@ -195,7 +282,7 @@ fn sphere_distance_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
         (1.0 - theta.cos()) / 2.0
     }
 
-    let hav = haversine(lat2 - lat1) + lat1.cos() * lat2.cos() * haversine(lon2 - lon1);
+    let hav = haversine(lat2_rad - lat1_rad) + lat1_rad.cos() * lat2_rad.cos() * haversine(lon2_rad - lon1_rad);
     let d = 2.0 * r * hav.sqrt().asin();
 
     d
@@ -380,7 +467,37 @@ fn remove_from<T, P: FnMut(&T) -> bool>(what: &mut Vec<T>, mut pred: P) {
 }
 
 
-fn ids<'a>(id_to_node: &'a HashMap<NodeId, &Node>, node_to_way_chains: &HashMap<NodeId, HashMap<PathChainId, &PathChain<'a>>>, start_node_id: NodeId, dest_node_id: NodeId, max_depth: usize) -> Option<DiscoveredPath<'a>> {
+fn bearing_ok_for_continuation(current_chains: &[PathChain], chain: &PathChain, max_bearing_diff_rad: f64, debug_bearing: bool) -> bool {
+    if let Some(last_chain) = current_chains.last() {
+        if let Some(last_seg) = last_chain.segments().last() {
+            let last_bearing = last_seg.bearing();
+            let next_bearing = chain.segments()[0].bearing();
+
+            if (last_bearing - next_bearing).abs() > max_bearing_diff_rad {
+                // the difference is too great; skip it
+                if debug_bearing {
+                    eprintln!(
+                        "cannot continue from {}-{} (bearing {:.2}°) to {}-{} (bearing {:.2}°)",
+                        last_seg.start_node.id.0, last_seg.end_node.id.0, last_bearing * 180.0 / PI,
+                        chain.segments()[0].start_node.id.0, chain.segments()[0].end_node.id.0, next_bearing * 180.0 / PI,
+                    );
+                }
+                return false;
+            }
+        }
+    }
+    true
+}
+
+
+fn kinda_astar_search<'a>(
+    id_to_node: &'a HashMap<NodeId, &Node>,
+    node_to_way_chains: &HashMap<NodeId, HashMap<PathChainId, &PathChain<'a>>>,
+    start_node_id: NodeId,
+    dest_node_id: NodeId,
+    max_bearing_diff_rad: f64,
+    mut debug_bearing: bool,
+) -> Option<DiscoveredPath<'a>> {
     let start_node = id_to_node.get(&start_node_id).expect("start node not found");
     let dest_node = id_to_node.get(&dest_node_id).expect("destination node not found");
     let initial_heuristic = 0.0 + sphere_distance_meters(
@@ -391,24 +508,21 @@ fn ids<'a>(id_to_node: &'a HashMap<NodeId, &Node>, node_to_way_chains: &HashMap<
     let mut paths: Vec<DiscoveredPath<'a>> = vec![DiscoveredPath {
         current_chains: vec![],
         current_node: start_node,
+        total_distance: 0.0,
         heuristic: initial_heuristic,
     }];
 
     while let Some(path) = paths.pop() {
-        if path.current_chains.len() >= max_depth {
-            // too far
-            //println!("{:?}", path);
-            continue;
-        }
-
         if dest_node_id == path.current_node.id {
             // found it!
             return Some(path);
         }
+        /*
         if path.count_node_occurrences(path.current_node.id) > 1 {
             // we have returned to this node; it does not make sense to expand this path further
             continue;
         }
+        */
 
         // find the way segments of which the node is a member
         let mut my_way_chains: Vec<PathChain<'a>> = if let Some(wcs) = node_to_way_chains.get(&path.current_node.id) {
@@ -419,14 +533,40 @@ fn ids<'a>(id_to_node: &'a HashMap<NodeId, &Node>, node_to_way_chains: &HashMap<
                     chain.subchain(path.current_node.id, dest_node_id)
                 })
                 .filter(|rel_chain| rel_chain.segments().len() > 0)
+                .filter(|chain| bearing_ok_for_continuation(&path.current_chains, chain, max_bearing_diff_rad, debug_bearing))
                 .collect()
         } else {
             Vec::new()
         };
 
+        if debug_bearing && my_way_chains.len() == 0 {
+            eprintln!("dead end at {:?}", path.current_node);
+        }
+
         // calculate paths
         for chain in my_way_chains.drain(..) {
             assert!(chain.segments().len() > 0);
+
+            // check if we can actually continue on this chain
+            // (the angle is not too sharp)
+            if let Some(last_chain) = path.current_chains.last() {
+                if let Some(last_seg) = last_chain.segments().last() {
+                    let last_bearing = last_seg.bearing();
+                    let next_bearing = chain.segments()[0].bearing();
+
+                    if (last_bearing - next_bearing).abs() > max_bearing_diff_rad {
+                        // the difference is too great; skip it
+                        if debug_bearing {
+                            eprintln!(
+                                "cannot continue from {}-{} (bearing {:.2}°) to {}-{} (bearing {:.2}°)",
+                                last_seg.start_node.id.0, last_seg.end_node.id.0, last_bearing * 180.0 / PI,
+                                chain.segments()[0].start_node.id.0, chain.segments()[0].end_node.id.0, next_bearing * 180.0 / PI,
+                            );
+                        }
+                        continue;
+                    }
+                }
+            }
 
             // calculate path segment's end's distance to the goal
             let last_seg = chain.segments().last().unwrap();
@@ -435,7 +575,8 @@ fn ids<'a>(id_to_node: &'a HashMap<NodeId, &Node>, node_to_way_chains: &HashMap<
                 last_node.lat(), last_node.lon(),
                 dest_node.lat(), dest_node.lon(),
             );
-            let heuristic = chain.total_distance() + end_crow_dist_to_target;
+            let distance = path.total_distance + chain.total_distance();
+            let heuristic = distance + end_crow_dist_to_target;
 
             let mut new_chains = path.current_chains.clone();
             new_chains.push(chain);
@@ -443,6 +584,7 @@ fn ids<'a>(id_to_node: &'a HashMap<NodeId, &Node>, node_to_way_chains: &HashMap<
             let new_path = DiscoveredPath {
                 current_chains: new_chains,
                 current_node: last_node,
+                total_distance: distance,
                 heuristic,
             };
             paths.push(new_path);
@@ -455,6 +597,35 @@ fn ids<'a>(id_to_node: &'a HashMap<NodeId, &Node>, node_to_way_chains: &HashMap<
     }
 
     None
+}
+
+fn dump_ways(id_to_node: &HashMap<NodeId, &Node>, ways: &[&Way]) {
+    let geoways: Vec<serde_json::Value> = ways
+        .iter()
+        .map(|way| {
+            let coords: Vec<serde_json::Value> = way.nodes
+                .iter()
+                .map(|nid| {
+                    let node = id_to_node.get(nid).unwrap();
+                    serde_json::json!([node.lon(), node.lat()])
+                })
+                .collect();
+            serde_json::json!({
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": coords,
+                },
+            })
+        })
+        .collect();
+    let geojson = serde_json::json!({
+        "type": "FeatureCollection",
+        "features": geoways,
+    });
+    let all_json_string = serde_json::to_string_pretty(&geojson)
+        .expect("failed to serialize path to JSON");
+    println!("{}", all_json_string);
 }
 
 macro_rules! eprintlntime {
@@ -474,7 +645,7 @@ fn main() {
     let start_time = Instant::now();
 
     let railways = {
-        let f = File::open(&opts.osm_path)
+        let f = File::open(&opts.osm_path())
             .expect("failed to open file");
         let mut reader = OsmPbfReader::new(f);
         reader
@@ -499,6 +670,17 @@ fn main() {
     remove_invalid_ways(&id_to_node, &mut ways);
     eprintlntime!(start_time, "invalid ways removed");
 
+    if let OptsMode::DumpWays(_) = &opts.mode {
+        dump_ways(&id_to_node, &ways);
+        return;
+    }
+    let (max_bearing_diff_deg, debug_bearing) = match &opts.mode {
+        OptsMode::Route(r) => (r.max_bearing_diff_deg, r.debug_bearing),
+        OptsMode::LongestPath(lp) => (lp.max_bearing_diff_deg, lp.debug_bearing),
+        _ => unreachable!(),
+    };
+    let max_bearing_diff_rad = max_bearing_diff_deg * PI / 180.0;
+
     let node_to_neighbors = calculate_neighbors(&ways);
     eprintlntime!(start_time, "neighbors calculated");
 
@@ -513,28 +695,79 @@ fn main() {
     let node_to_way_chains = calculate_node_to_way_chains(&way_chains);
     eprintlntime!(start_time, "way chain membership calculated");
 
-    let start_fake_node = make_fake_node(opts.start_lat, opts.start_lon);
-    let dest_fake_node = make_fake_node(opts.dest_lat, opts.dest_lon);
+    let node_pairs = match &opts.mode {
+        OptsMode::Route(r) => {
+            let start_fake_node = make_fake_node(r.start_lat, r.start_lon);
+            let dest_fake_node = make_fake_node(r.dest_lat, r.dest_lon);
 
-    // find closest point to both coordinates
-    let start_node = find_closest_node(start_fake_node, &id_to_node)
-        .expect("no start node found");
-    eprintlntime!(start_time, "start node: {:?}", start_node);
+            let start_node = find_closest_node(start_fake_node, &id_to_node)
+                .expect("no start node found");
 
-    let dest_node = find_closest_node(dest_fake_node, &id_to_node)
-        .expect("no destination node found");
-    eprintlntime!(start_time, "destination node: {:?}", dest_node);
+            let dest_node = find_closest_node(dest_fake_node, &id_to_node)
+                .expect("no destination node found");
 
-    let mut max_depth = 1024;
-    let path = loop {
-        eprintlntime!(start_time, "depth {}", max_depth);
-        if let Some(path) = ids(&id_to_node, &node_to_way_chains, start_node.id, dest_node.id, max_depth) {
-            break path;
-        } else {
-            max_depth += 1;
-        }
+            vec![(start_node, dest_node)]
+        },
+        OptsMode::LongestPath(_lp) => {
+            let mut np = Vec::new();
+            for chain1 in way_chains.iter() {
+                if chain1.segments().len() == 0 {
+                    continue;
+                }
+
+                for chain2 in way_chains.iter() {
+                    if chain2.segments().len() == 0 {
+                        continue;
+                    }
+
+                    let node_pairs = &[
+                        (chain1.start_node().unwrap(), chain2.start_node().unwrap()),
+                        (chain1.start_node().unwrap(), chain2.end_node().unwrap()),
+                        (chain1.end_node().unwrap(), chain2.start_node().unwrap()),
+                        (chain1.end_node().unwrap(), chain2.end_node().unwrap()),
+                    ];
+                    for (start_node, dest_node) in node_pairs {
+                        if start_node.id == dest_node.id {
+                            continue;
+                        }
+                        np.push((*start_node, *dest_node));
+                    }
+                }
+            }
+            np
+        },
+        _ => unreachable!(),
     };
 
+    let mut longest_path: Option<DiscoveredPath> = None;
+    for (start_node, dest_node) in node_pairs {
+        eprintlntime!(start_time, "finding path from {:?}", start_node);
+        eprintlntime!(start_time, "finding path to {:?}", dest_node);
+        let path_opt = kinda_astar_search(
+            &id_to_node,
+            &node_to_way_chains,
+            start_node.id,
+            dest_node.id,
+            max_bearing_diff_rad,
+            debug_bearing,
+        );
+        eprintlntime!(start_time, "search completed");
+        let path = match path_opt {
+            Some(p) => p,
+            None => panic!("no path found!"),
+        };
+        eprintlntime!(start_time, "path has total distance of {}", path.total_distance);
+
+        if let Some(lp) = &longest_path {
+            if lp.total_distance < path.total_distance {
+                longest_path = Some(path);
+            }
+        } else {
+            longest_path = Some(path);
+        }
+    }
+
+    let path = longest_path.unwrap();
     let mut line_string_coords = Vec::new();
     for chain in &path.current_chains {
         if chain.segments().len() > 0 {
