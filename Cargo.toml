@@ -1,0 +1,9 @@
+[package]
+name = "osm-rail-route"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "3.0.0-beta.5" }
+osmpbfreader = { git = "https://github.com/Voultapher/osmpbfreader-rs.git" }
+serde_json = { version = "1.0" }

@@ -1,0 +1,15 @@
+{
+    "compilerOptions": {
+        "module": "es6",
+        "noEmitOnError": true,
+        "noImplicitAny": true,
+        "noImplicitReturns": true,
+        "noImplicitThis": true,
+        "noImplicitUseStrict": true,
+        "noImplicitOverride": true,
+        "noUnusedLocals": true,
+        "sourceMap": true,
+        "strictNullChecks": true,
+        "target": "ES5"
+    }
+}
