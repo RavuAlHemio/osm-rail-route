@@ -18,7 +18,7 @@ impl Opts {
             OptsMode::Route(r) => &r.osm_path,
             OptsMode::DumpWays(dw) => &dw.osm_path,
             OptsMode::ShortestPaths(sp) => &sp.osm_path,
-            OptsMode::LongestPath(lp) => &lp.osm_path,
+            OptsMode::LongestShortestPath(lp) => &lp.osm_path,
         }
     }
 }
@@ -27,7 +27,7 @@ enum OptsMode {
     Route(RouteOpts),
     DumpWays(DumpWaysOpts),
     ShortestPaths(ShortestPathsOpts),
-    LongestPath(LongestPathOpts),
+    LongestShortestPath(LongestShortestPathOpts),
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
 struct RouteOpts {
@@ -48,7 +48,7 @@ struct ShortestPathsOpts {
     pub start_lon: f64,
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
-struct LongestPathOpts {
+struct LongestShortestPathOpts {
     pub osm_path: PathBuf,
 }
 
@@ -799,12 +799,12 @@ fn main() {
                 "features": geoways,
             })
         },
-        OptsMode::LongestPath(_lp) => {
+        OptsMode::LongestShortestPath(_lp) => {
             let stop_closest_node_ids: HashSet<NodeId> = stops.iter()
                 .filter_map(|s| find_closest_node(s, way_nodes.iter().map(|n| *n)))
                 .map(|n| n.id)
                 .collect();
-            let mut longest_path: Option<(NodeId, NodeId, ShortestPath)> = None;
+            let mut longest_shortest_path: Option<(NodeId, NodeId, ShortestPath)> = None;
 
             for (i, &start_node_id) in stop_closest_node_ids.iter().enumerate() {
                 let mut other_node_ids = stop_closest_node_ids.clone();
@@ -819,23 +819,24 @@ fn main() {
                 eprintlntime!(start_time, "{}/{} from {:?}: {} other IDs, {} paths found", i+1, stop_closest_node_ids.len(), start_node_id, other_node_ids.len(), foundlings.len());
 
                 for (dest_node_id, path) in foundlings.drain() {
-                    if let Some((_, _, longest_path_detail)) = &longest_path {
-                        if longest_path_detail.total_distance < path.total_distance {
-                            eprintlntime!(start_time, "new longest path is between {:?} and {:?} ({})", start_node_id, dest_node_id, &path.total_distance);
-                            longest_path = Some((start_node_id, dest_node_id, path));
+                    if let Some((_, _, longest_shortest_path_detail)) = &longest_shortest_path {
+                        if longest_shortest_path_detail.total_distance < path.total_distance {
+                            eprintlntime!(start_time, "new longest shortest path is between {:?} and {:?} ({})", start_node_id, dest_node_id, &path.total_distance);
+                            longest_shortest_path = Some((start_node_id, dest_node_id, path));
                         }
-                        // only remember the longest path
+                        // only remember the shortest path that is the longest
                     } else {
-                        eprintlntime!(start_time, "first longest path is between {:?} and {:?} ({})", start_node_id, dest_node_id, &path.total_distance);
-                        longest_path = Some((start_node_id, dest_node_id, path));
+                        eprintlntime!(start_time, "first longest shortest path is between {:?} and {:?} ({})", start_node_id, dest_node_id, &path.total_distance);
+                        longest_shortest_path = Some((start_node_id, dest_node_id, path));
                     }
                 }
             }
 
-            let longest_shortest_path = longest_path
+            let longest_shortest_path_detail = longest_shortest_path
                 .map(|(_, _, sp)| sp)
                 .expect("no path found");
-            path_to_geojson(longest_shortest_path.current_segments.iter())
+            eprintlntime!(start_time, "done! longest shortest path distance: {}", longest_shortest_path_detail.total_distance);
+            path_to_geojson(longest_shortest_path_detail.current_segments.iter())
         },
         _ => unreachable!(),
     };
