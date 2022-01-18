@@ -4,6 +4,8 @@
 #    48.1502375 16.4565878
 
 # Rodaun -> Stammersdorf
-& cargo run --release "C:\Users\Ondra\Downloads\vienna-trams-latest.osm.pbf" `
+& cargo run --release -- `
+    route `
+    "C:\Users\Ondra\Downloads\vienna-trams-latest.osm.pbf" `
     48.1336924 16.2665872 `
     48.2983866 16.4197188

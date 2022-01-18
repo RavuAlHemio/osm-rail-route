@@ -81,85 +81,9 @@ impl<'a> PathSegment<'a> {
 }
 
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct PathChainId(pub i64);
-
-
-#[derive(Clone, Debug, PartialEq)]
-struct PathChain<'a> {
-    chain_id: PathChainId,
-    segments: Vec<PathSegment<'a>>,
-    total_distance: f64,
-}
-impl<'a> PathChain<'a> {
-    pub fn chain_id(&self) -> PathChainId { self.chain_id }
-    pub fn segments(&self) -> &Vec<PathSegment<'a>> { &self.segments }
-    pub fn total_distance(&self) -> f64 { self.total_distance }
-
-    pub fn new(chain_id: PathChainId, segments: Vec<PathSegment<'a>>) -> Self {
-        let total_distance = segments.iter().map(|seg| seg.distance).sum();
-
-        Self {
-            chain_id,
-            segments,
-            total_distance,
-        }
-    }
-
-    pub fn subchain(&self, start_node_id: Option<NodeId>, end_node_id: Option<NodeId>) -> Self {
-        let mut sub = self.clone();
-        if let Some(snid) = start_node_id {
-            remove_while(&mut sub.segments, |seg| seg.start_node.id != snid);
-        }
-        if let Some(enid) = end_node_id {
-            remove_from(&mut sub.segments, |seg| seg.start_node.id == enid);
-        }
-        sub.total_distance = sub.segments.iter().map(|seg| seg.distance).sum();
-        sub
-    }
-
-    pub fn is_valid(&self) -> bool {
-        if self.segments.len() == 0 {
-            return true;
-        }
-        let mut prev_node_id = self.segments[0].end_node.id;
-        for seg in self.segments.iter().skip(1) {
-            if prev_node_id != seg.start_node.id {
-                return false;
-            }
-            prev_node_id = seg.end_node.id;
-        }
-        true
-    }
-
-    pub fn contains_node(&self, node_id: NodeId) -> bool {
-        if self.segments.len() == 0 {
-            return false;
-        }
-        if self.segments[0].start_node.id == node_id {
-            return true;
-        }
-        for seg in &self.segments {
-            if seg.end_node.id == node_id {
-                return true;
-            }
-        }
-        false
-    }
-
-    pub fn start_node(&self) -> Option<&Node> {
-        self.segments().first().map(|s| s.start_node)
-    }
-
-    pub fn end_node(&self) -> Option<&Node> {
-        self.segments().last().map(|s| s.end_node)
-    }
-}
-
-
 #[derive(Clone, Debug, PartialEq)]
 struct DiscoveredPath<'a> {
-    pub current_chains: Vec<PathChain<'a>>,
+    pub current_segments: Vec<PathSegment<'a>>,
     pub current_node: &'a Node,
     pub total_distance: f64,
     pub heuristic: f64,
@@ -167,16 +91,17 @@ struct DiscoveredPath<'a> {
 impl<'a> DiscoveredPath<'a> {
     pub fn count_node_occurrences(&self, node_id: NodeId) -> usize {
         let mut count = 0;
-        for chain in &self.current_chains {
-            if chain.segments().len() > 0 {
-                if chain.segments()[0].start_node.id == node_id {
+        let mut first_node = true;
+        for seg in &self.current_segments {
+            if first_node {
+                if seg.start_node.id == node_id {
                     count += 1;
                 }
+                first_node = false;
             }
-            for seg in chain.segments() {
-                if seg.end_node.id == node_id {
-                    count += 1;
-                }
+
+            if seg.end_node.id == node_id {
+                count += 1;
             }
         }
         count
@@ -184,9 +109,7 @@ impl<'a> DiscoveredPath<'a> {
 
     pub fn to_nodes(&self) -> Vec<&Node> {
         let mut ret = Vec::new();
-        let all_segments = self.current_chains
-            .iter()
-            .flat_map(|chain| chain.segments().iter());
+        let all_segments = &self.current_segments;
         let mut first_segment = true;
         for segment in all_segments {
             if first_segment {
@@ -199,10 +122,13 @@ impl<'a> DiscoveredPath<'a> {
     }
 
     pub fn to_segments(&self) -> Vec<&PathSegment<'a>> {
-        self.current_chains
+        self.current_segments
             .iter()
-            .flat_map(|chain| chain.segments())
             .collect()
+    }
+
+    pub fn previous_node(&self) -> Option<&Node> {
+        self.to_segments().last().map(|seg| seg.start_node)
     }
 }
 
@@ -404,100 +330,6 @@ fn calculate_neighbors(ways: &[&Way]) -> HashMap<NodeId, HashSet<NodeId>> {
     node_to_neighbors
 }
 
-fn calculate_way_chains<'a>(node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>, id_to_node: &'a HashMap<NodeId, &Node>) -> Vec<PathChain<'a>> {
-    let mut next_path_chain_id = 1i64;
-    let mut way_chains = Vec::new();
-
-    // get the nodes that are not just pass-through
-    let node_set_to_process: HashSet<NodeId> = node_to_neighbors
-        .iter()
-        .filter(|(_node_id, neighbors)| neighbors.len() != 2)
-        .map(|(node_id, _neighbors)| *node_id)
-        .collect();
-    let mut nodes_to_process: Vec<NodeId> = node_set_to_process
-        .iter()
-        .map(|&nid| nid)
-        .collect();
-
-    while let Some(node_id) = nodes_to_process.pop() {
-        // get this node
-        let node = id_to_node.get(&node_id).unwrap();
-
-        // gimme neighbors
-        let empty_set = HashSet::new();
-        let neighbors = node_to_neighbors.get(&node_id)
-            .unwrap_or(&empty_set);
-
-        for &neighbor_id in neighbors {
-            let neighbor = id_to_node.get(&neighbor_id).unwrap();
-            let initial_distance = sphere_distance_meters(
-                node.lat(), node.lon(),
-                neighbor.lat(), neighbor.lon(),
-            );
-            let initial_seg = PathSegment {
-                start_node: node,
-                end_node: neighbor,
-                distance: initial_distance,
-            };
-            let mut segs: Vec<PathSegment> = vec![initial_seg];
-
-            // follow the line until the end or we land at an intersection
-            loop {
-                let last_seg = segs.last().unwrap();
-                let prev_node = last_seg.start_node;
-                let cur_node = last_seg.end_node;
-
-                let cur_neighbors = node_to_neighbors.get(&cur_node.id).unwrap();
-                if cur_neighbors.len() != 2 {
-                    // intersection or terminal!
-                    break;
-                }
-                let &new_neighbor = cur_neighbors.iter()
-                    .filter(|&&nid| nid != prev_node.id)
-                    .nth(0)
-                    .unwrap();
-                let new_neighbor_node = id_to_node.get(&new_neighbor).unwrap();
-
-                let distance = sphere_distance_meters(
-                    cur_node.lat(), cur_node.lon(),
-                    new_neighbor_node.lat(), new_neighbor_node.lon(),
-                );
-                segs.push(PathSegment {
-                    start_node: cur_node,
-                    end_node: &new_neighbor_node,
-                    distance,
-                });
-            }
-
-            let path_seg = PathChain::new(
-                PathChainId(next_path_chain_id),
-                segs,
-            );
-            next_path_chain_id += 1;
-            way_chains.push(path_seg);
-        }
-    }
-
-    way_chains
-}
-
-fn calculate_node_to_way_chains<'a>(way_chains: &'a [PathChain<'a>]) -> HashMap<NodeId, HashMap<PathChainId, &'a PathChain<'a>>> {
-    let mut node_to_way_chains = HashMap::new();
-    for chain in way_chains {
-        for segment in chain.segments() {
-            node_to_way_chains.entry(segment.start_node.id)
-                .or_insert_with(|| HashMap::new())
-                .entry(chain.chain_id())
-                .or_insert(chain);
-            node_to_way_chains.entry(segment.end_node.id)
-                .or_insert_with(|| HashMap::new())
-                .entry(chain.chain_id())
-                .or_insert(chain);
-        }
-    }
-    node_to_way_chains
-}
-
 fn remove_while<T, P: FnMut(&T) -> bool>(what: &mut Vec<T>, mut pred: P) {
     let mut we_are_done = false;
     what.retain(|v| {
@@ -619,19 +451,20 @@ fn whittle_down_neighbors(base_node: &Node, neighbors: &mut Vec<&Node>, prev_nod
 
 fn kinda_astar_search<'a>(
     id_to_node: &'a HashMap<NodeId, &Node>,
-    node_to_way_chains: &HashMap<NodeId, HashMap<PathChainId, &PathChain<'a>>>,
+    node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
     start_node_id: NodeId,
     dest_node_id: NodeId,
 ) -> Option<DiscoveredPath<'a>> {
     let start_node = id_to_node.get(&start_node_id).expect("start node not found");
     let dest_node = id_to_node.get(&dest_node_id).expect("destination node not found");
+    let mut visited_segments: HashSet<(NodeId, NodeId)> = HashSet::new();
     let initial_heuristic = 0.0 + sphere_distance_meters(
         start_node.lat(), start_node.lon(),
         dest_node.lat(), dest_node.lon(),
     );
 
     let mut paths: Vec<DiscoveredPath<'a>> = vec![DiscoveredPath {
-        current_chains: vec![],
+        current_segments: vec![],
         current_node: start_node,
         total_distance: 0.0,
         heuristic: initial_heuristic,
@@ -643,54 +476,40 @@ fn kinda_astar_search<'a>(
             return Some(path);
         }
 
-        // find the way segments of which the node is a member
-        let mut my_way_chains: Vec<PathChain<'a>> = if let Some(wcs) = node_to_way_chains.get(&path.current_node.id) {
-            let mut chains: Vec<PathChain> = wcs
-                .values()
-                .map(|chain| {
-                    // cut the chain to only contain the segment between our node and (if contained) the destination node
-                    chain.subchain(Some(path.current_node.id), Some(dest_node_id))
-                })
-                .filter(|rel_chain| rel_chain.segments().len() > 0)
-                .collect();
-            let mut neighbors: Vec<&Node> = chains.iter()
-                .map(|c| c.segments()[0].start_node)
-                .collect();
-            let prev_node = path.current_chains.last()
-                .map(|c| c.segments())
-                .map(|s| s.last())
-                .flatten()
-                .map(|s| s.start_node);
-            whittle_down_neighbors(&path.current_node, &mut neighbors, prev_node);
-            chains.retain(|c| neighbors.iter().any(|n| n.id == c.segments()[0].start_node.id));
-            chains
+        // find neighbors
+        let mut neighbors = if let Some(node_neighbors) = node_to_neighbors.get(&path.current_node.id) {
+            node_neighbors.iter()
+                .filter_map(|n| id_to_node.get(n))
+                .map(|n| *n)
+                .collect()
         } else {
             Vec::new()
         };
 
-        // calculate paths
-        for chain in my_way_chains.drain(..) {
-            assert!(chain.segments().len() > 0);
+        let prev_node_opt = path.previous_node();
+        whittle_down_neighbors(&path.current_node, &mut neighbors, prev_node_opt);
+        for neighbor in &neighbors {
+            if !visited_segments.insert((path.current_node.id, neighbor.id)) {
+                // we have taken this segment before
+                // prevent looping infinitely
+                continue;
+            }
 
-            // calculate path segment's end's distance to the goal
-            let last_seg = chain.segments().last().unwrap();
-            let last_node = id_to_node.get(&last_seg.end_node.id).unwrap();
-            let end_crow_dist_to_target = sphere_distance_meters(
-                last_node.lat(), last_node.lon(),
+            let segment = PathSegment::new_with_sphere_distance(
+                path.current_node,
+                neighbor,
+            );
+            let remain_distance_optimistic = sphere_distance_meters(
+                neighbor.lat(), neighbor.lon(),
                 dest_node.lat(), dest_node.lon(),
             );
-            let distance = path.total_distance + chain.total_distance();
-            let heuristic = distance + end_crow_dist_to_target;
 
-            let mut new_chains = path.current_chains.clone();
-            new_chains.push(chain);
+            let mut new_path = path.clone();
+            new_path.current_node = neighbor;
+            new_path.total_distance += segment.distance;
+            new_path.current_segments.push(segment);
+            new_path.heuristic = new_path.total_distance + remain_distance_optimistic;
 
-            let new_path = DiscoveredPath {
-                current_chains: new_chains,
-                current_node: last_node,
-                total_distance: distance,
-                heuristic,
-            };
             paths.push(new_path);
         }
 
@@ -721,13 +540,6 @@ fn shortest_paths<'a>(
     }];
 
     while let Some(path) = paths.pop() {
-        /*
-        eprintln!("we are staring at {:?}", path.current_node);
-        if let Some(ls) = path.current_segments.last() {
-            eprintln!("  having come from {}", ls.start_node.id.0);
-        }
-        */
-
         if dest_nodes.contains(&path.current_node.id) {
             // found a destination node!
             if let Some(cur_path) = dest_node_to_path.get(&path.current_node.id) {
@@ -900,17 +712,6 @@ fn main() {
     let node_to_neighbors = calculate_neighbors(&ways);
     eprintlntime!(start_time, "neighbors calculated");
 
-    let way_chains = calculate_way_chains(&node_to_neighbors, &id_to_node);
-    for way_chain in &way_chains {
-        if !way_chain.is_valid() {
-            panic!("way chain invalid! {:#?}", way_chain);
-        }
-    }
-    eprintlntime!(start_time, "way chains calculated");
-
-    let node_to_way_chains = calculate_node_to_way_chains(&way_chains);
-    eprintlntime!(start_time, "way chain membership calculated");
-
     let geojson = match &opts.mode {
         OptsMode::Route(r) => {
             let start_fake_node = make_fake_node(r.start_lat, r.start_lon);
@@ -926,7 +727,7 @@ fn main() {
             eprintlntime!(start_time, "finding path to {:?}", dest_node);
             let path_opt = kinda_astar_search(
                 &id_to_node,
-                &node_to_way_chains,
+                &node_to_neighbors,
                 start_node.id,
                 dest_node.id,
             );
