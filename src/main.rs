@@ -673,7 +673,15 @@ fn main() {
             .get_objs_and_deps(|obj|
                 obj.is_way()
                 //&& obj.tags().get("railway").map(|r| r != "platform").unwrap_or(false)
-                && obj.tags().get("railway").map(|r| r == "tram" || r == "tram_stop").unwrap_or(false)
+                && (
+                    obj.tags().get("railway").map(|r|
+                        r == "tram" || r == "tram_stop"
+                        || r == "light_rail" || r == "stop"
+                    ).unwrap_or(false)
+                    || obj.tags().get("public_transport").map(|pt|
+                        pt == "stop_position"
+                    ).unwrap_or(false)
+                )
             )
             .expect("failed to obtain railways")
     };
@@ -697,7 +705,14 @@ fn main() {
         .collect();
     let stops: Vec<&Node> = railways.values()
         .filter_map(|o| o.node())
-        .filter(|n| n.tags.get("railway").map(|r| r == "tram_stop").unwrap_or(false))
+        .filter(|n|
+            n.tags.get("railway").map(|r|
+                r == "tram_stop" || r == "stop"
+            ).unwrap_or(false)
+            || n.tags.get("public_transport").map(|pt|
+                pt == "stop_position"
+            ).unwrap_or(false)
+        )
         .collect();
     eprintlntime!(start_time, "nodes and ways extracted");
 
