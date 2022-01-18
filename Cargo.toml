@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-clap = { version = "3.0.8", features = ["derive"] }
+clap = { version = "3.0", features = ["derive"] }
 osmpbfreader = { git = "https://github.com/TeXitoi/osmpbfreader-rs.git" }
+rayon = { version = "1.5" }
 serde_json = { version = "1.0" }

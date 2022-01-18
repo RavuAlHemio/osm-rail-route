@@ -2,10 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 use std::fs::File;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use clap::Parser;
 use osmpbfreader::{Node, NodeId, OsmPbfReader, Tags, Way};
+use rayon::prelude::*;
 
 
 #[derive(Clone, Debug, Parser, PartialEq)]
@@ -19,6 +21,7 @@ enum OptsMode {
     DumpWays,
     ShortestPaths(ShortestPathsOpts),
     LongestShortestPath,
+    LongestPath,
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
 struct RouteOpts {
@@ -63,13 +66,13 @@ impl<'a> PathSegment<'a> {
 
 
 #[derive(Clone, Debug, PartialEq)]
-struct DiscoveredPath<'a> {
+struct RoutingPath<'a> {
     pub current_segments: Vec<PathSegment<'a>>,
     pub current_node: &'a Node,
     pub total_distance: f64,
     pub heuristic: f64,
 }
-impl<'a> DiscoveredPath<'a> {
+impl<'a> RoutingPath<'a> {
     pub fn count_node_occurrences(&self, node_id: NodeId) -> usize {
         let mut count = 0;
         let mut first_node = true;
@@ -115,12 +118,12 @@ impl<'a> DiscoveredPath<'a> {
 
 
 #[derive(Clone, Debug, PartialEq)]
-struct ShortestPath<'a> {
+struct LengthPath<'a> {
     pub current_segments: Vec<PathSegment<'a>>,
     pub current_node: &'a Node,
     pub total_distance: f64,
 }
-impl<'a> ShortestPath<'a> {
+impl<'a> LengthPath<'a> {
     pub fn to_nodes(&self) -> Vec<&Node> {
         let mut ret = Vec::new();
         let mut first_segment = true;
@@ -435,7 +438,7 @@ fn kinda_astar_search<'a>(
     node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
     start_node_id: NodeId,
     dest_node_id: NodeId,
-) -> Option<DiscoveredPath<'a>> {
+) -> Option<RoutingPath<'a>> {
     let start_node = id_to_node.get(&start_node_id).expect("start node not found");
     let dest_node = id_to_node.get(&dest_node_id).expect("destination node not found");
     let mut visited_segments: HashSet<(NodeId, NodeId)> = HashSet::new();
@@ -444,7 +447,7 @@ fn kinda_astar_search<'a>(
         dest_node.lat(), dest_node.lon(),
     );
 
-    let mut paths: Vec<DiscoveredPath<'a>> = vec![DiscoveredPath {
+    let mut paths: Vec<RoutingPath<'a>> = vec![RoutingPath {
         current_segments: vec![],
         current_node: start_node,
         total_distance: 0.0,
@@ -503,18 +506,17 @@ fn kinda_astar_search<'a>(
     None
 }
 
-
 fn shortest_paths<'a>(
     id_to_node: &'a HashMap<NodeId, &Node>,
     node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
     start_node_id: NodeId,
     dest_nodes: &HashSet<NodeId>,
-) -> HashMap<NodeId, ShortestPath<'a>> {
+) -> HashMap<NodeId, LengthPath<'a>> {
     let start_node = id_to_node.get(&start_node_id).expect("start node not found");
-    let mut dest_node_to_path: HashMap<NodeId, ShortestPath> = HashMap::new();
+    let mut dest_node_to_path: HashMap<NodeId, LengthPath> = HashMap::new();
     let mut visited_segments: HashSet<(NodeId, NodeId)> = HashSet::new();
 
-    let mut paths: Vec<ShortestPath<'a>> = vec![ShortestPath {
+    let mut paths: Vec<LengthPath<'a>> = vec![LengthPath {
         current_segments: vec![],
         current_node: start_node,
         total_distance: 0.0,
@@ -576,6 +578,68 @@ fn shortest_paths<'a>(
 
     dest_node_to_path
 }
+
+
+fn longest_path_from<'a>(
+    id_to_node: &'a HashMap<NodeId, &Node>,
+    node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
+    start_node_id: NodeId,
+) -> Option<LengthPath<'a>> {
+    let mut longest_path: Option<LengthPath<'a>> = None;
+    let mut visited_segments: HashSet<(NodeId, NodeId)> = HashSet::new();
+
+    let start_node = id_to_node.get(&start_node_id)
+        .expect("start node not found");
+
+    let mut paths: Vec<LengthPath<'a>> = vec![LengthPath {
+        current_segments: vec![],
+        current_node: start_node,
+        total_distance: 0.0,
+    }];
+
+    while let Some(path) = paths.pop() {
+        if let Some(lp) = &longest_path {
+            if lp.total_distance < path.total_distance {
+                longest_path = Some(path.clone());
+            }
+        } else {
+            longest_path = Some(path.clone());
+        }
+
+        // check neighborhood
+        let mut neighbors: Vec<&Node> = node_to_neighbors
+            .get(&path.current_node.id).unwrap()
+            .iter()
+            .map(|nid| *id_to_node.get(nid).unwrap())
+            .collect();
+
+        whittle_down_neighbors(
+            &path.current_node,
+            &mut neighbors,
+            path.current_segments.last().map(|ls| ls.start_node),
+        );
+
+        for &neighbor in &neighbors {
+            if !visited_segments.insert((path.current_node.id, neighbor.id)) {
+                continue;
+            }
+
+            let new_seg = PathSegment::new_with_sphere_distance(
+                path.current_node,
+                neighbor,
+            );
+
+            let mut new_path = path.clone();
+            new_path.total_distance += new_seg.distance;
+            new_path.current_segments.push(new_seg);
+            new_path.current_node = neighbor;
+            paths.push(new_path);
+        }
+    }
+
+    longest_path
+}
+
 
 fn dump_ways(id_to_node: &HashMap<NodeId, &Node>, ways: &[&Way]) {
     let geoways: Vec<serde_json::Value> = ways
@@ -785,7 +849,7 @@ fn main() {
                 .filter_map(|s| find_closest_node(s, way_nodes.iter().map(|n| *n)))
                 .map(|n| n.id)
                 .collect();
-            let mut longest_shortest_path: Option<(NodeId, NodeId, ShortestPath)> = None;
+            let mut longest_shortest_path: Option<(NodeId, NodeId, LengthPath)> = None;
 
             for (i, &start_node_id) in stop_closest_node_ids.iter().enumerate() {
                 let mut other_node_ids = stop_closest_node_ids.clone();
@@ -818,6 +882,26 @@ fn main() {
                 .expect("no path found");
             eprintlntime!(start_time, "done! longest shortest path distance: {}", longest_shortest_path_detail.total_distance);
             path_to_geojson(longest_shortest_path_detail.current_segments.iter())
+        },
+        OptsMode::LongestPath => {
+            let started_counter: AtomicUsize = AtomicUsize::new(0);
+            let longest_path_opt = id_to_node.par_iter()
+                .inspect(|_| {
+                    let counter = started_counter.fetch_add(1, Ordering::SeqCst);
+                    eprintlntime!(start_time, "started item {}/{}", counter, id_to_node.len());
+                })
+                .filter_map(|(&start_node_id, _)| {
+                    longest_path_from(
+                        &id_to_node,
+                        &node_to_neighbors,
+                        start_node_id,
+                    )
+                })
+                .max_by(|left, right| left.total_distance.partial_cmp(&right.total_distance).unwrap());
+
+            let longest_path = longest_path_opt
+                .expect("no path found");
+            path_to_geojson(longest_path.current_segments.iter())
         },
         _ => unreachable!(),
     };
