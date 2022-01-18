@@ -1,6 +1,6 @@
 #!/bin/sh
 destdir="$HOME/Downloads"
-osmosis="$HOME/osmosis/bin/osmosis.sh"
+osmosis="$HOME/osmosis/bin/osmosis"
 mapurl="https://download.geofabrik.de/europe/austria-latest.osm.pbf"
 mapfile="austria-latest.osm.pbf"
 tramfile="vienna-baden-trams-latest.osm.pbf"
