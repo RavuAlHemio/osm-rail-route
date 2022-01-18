@@ -10,46 +10,27 @@ use osmpbfreader::{Node, NodeId, OsmPbfReader, Tags, Way};
 
 #[derive(Clone, Debug, Parser, PartialEq)]
 struct Opts {
+    pub osm_path: PathBuf,
     #[clap(subcommand)] mode: OptsMode,
-}
-impl Opts {
-    pub fn osm_path(&self) -> &PathBuf {
-        match &self.mode {
-            OptsMode::Route(r) => &r.osm_path,
-            OptsMode::DumpWays(dw) => &dw.osm_path,
-            OptsMode::ShortestPaths(sp) => &sp.osm_path,
-            OptsMode::LongestShortestPath(lp) => &lp.osm_path,
-        }
-    }
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
 enum OptsMode {
     Route(RouteOpts),
-    DumpWays(DumpWaysOpts),
+    DumpWays,
     ShortestPaths(ShortestPathsOpts),
-    LongestShortestPath(LongestShortestPathOpts),
+    LongestShortestPath,
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
 struct RouteOpts {
-    pub osm_path: PathBuf,
     pub start_lat: f64,
     pub start_lon: f64,
     pub dest_lat: f64,
     pub dest_lon: f64,
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
-struct DumpWaysOpts {
-    pub osm_path: PathBuf,
-}
-#[derive(Clone, Debug, Parser, PartialEq)]
 struct ShortestPathsOpts {
-    pub osm_path: PathBuf,
     pub start_lat: f64,
     pub start_lon: f64,
-}
-#[derive(Clone, Debug, Parser, PartialEq)]
-struct LongestShortestPathOpts {
-    pub osm_path: PathBuf,
 }
 
 
@@ -666,7 +647,7 @@ fn main() {
     let start_time = Instant::now();
 
     let railways = {
-        let f = File::open(&opts.osm_path())
+        let f = File::open(&opts.osm_path)
             .expect("failed to open file");
         let mut reader = OsmPbfReader::new(f);
         reader
@@ -719,7 +700,7 @@ fn main() {
     remove_invalid_ways(&id_to_node, &mut ways);
     eprintlntime!(start_time, "invalid ways removed");
 
-    if let OptsMode::DumpWays(_) = &opts.mode {
+    if let OptsMode::DumpWays = &opts.mode {
         dump_ways(&id_to_node, &ways);
         return;
     }
@@ -799,7 +780,7 @@ fn main() {
                 "features": geoways,
             })
         },
-        OptsMode::LongestShortestPath(_lp) => {
+        OptsMode::LongestShortestPath => {
             let stop_closest_node_ids: HashSet<NodeId> = stops.iter()
                 .filter_map(|s| find_closest_node(s, way_nodes.iter().map(|n| *n)))
                 .map(|n| n.id)
