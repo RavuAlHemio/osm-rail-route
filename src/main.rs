@@ -792,13 +792,6 @@ fn main() {
             let mut longest_path: Option<(NodeId, NodeId, ShortestPath)> = None;
 
             for (i, &start_node_id) in stop_closest_node_ids.iter().enumerate() {
-                if i == 0 {
-                    eprintln!("WARNING: RODAUN MODE ENABLED");
-                }
-                if !&[5927477527, 5927469093, 285955105].iter().any(|n: &i64| *n == start_node_id.0) {
-                    continue;
-                }
-
                 let mut other_node_ids = stop_closest_node_ids.clone();
                 other_node_ids.remove(&start_node_id);
 
