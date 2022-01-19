@@ -14,7 +14,7 @@ use rayon::prelude::*;
 struct Opts {
     pub osm_path: PathBuf,
     #[clap(subcommand)] mode: OptsMode,
-    #[clap(short, long, takes_value = true, multiple_occurrences = true)] pub debug_node_ids: Vec<i64>,
+    #[clap(short = 'D', long, takes_value = true, multiple_occurrences = true)] pub debug_node_ids: Vec<i64>,
     #[clap(short, long)] pub directional_segments: bool,
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
