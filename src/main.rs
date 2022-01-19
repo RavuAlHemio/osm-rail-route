@@ -140,6 +140,62 @@ impl<'a> LengthPath<'a> {
 }
 
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct OrderedNodePair {
+    first_node: NodeId,
+    second_node: NodeId,
+}
+impl OrderedNodePair {
+    pub fn new(
+        first_node: NodeId,
+        second_node: NodeId,
+    ) -> Self {
+        Self {
+            first_node,
+            second_node,
+        }
+    }
+
+    pub fn first_node(&self) -> NodeId { self.first_node }
+    pub fn second_node(&self) -> NodeId { self.second_node }
+}
+impl From<(NodeId, NodeId)> for OrderedNodePair {
+    fn from(pair: (NodeId, NodeId)) -> Self {
+        Self::new(pair.0, pair.1)
+    }
+}
+
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct UnorderedNodePair {
+    pair: OrderedNodePair,
+}
+impl UnorderedNodePair {
+    pub fn new(
+        one_node: NodeId,
+        other_node: NodeId,
+    ) -> Self {
+        let pair = if one_node <= other_node {
+            OrderedNodePair::new(one_node, other_node)
+        } else {
+            OrderedNodePair::new(other_node, one_node)
+        };
+
+        Self {
+            pair,
+        }
+    }
+
+    pub fn smaller_node(&self) -> NodeId { self.pair.first_node() }
+    pub fn greater_node(&self) -> NodeId { self.pair.second_node() }
+}
+impl From<(NodeId, NodeId)> for UnorderedNodePair {
+    fn from(pair: (NodeId, NodeId)) -> Self {
+        Self::new(pair.0, pair.1)
+    }
+}
+
+
 fn bearing(node_a: &Node, node_b: &Node) -> f64 {
     let lat_a = node_a.lat() * PI / 180.0;
     let lat_b = node_b.lat() * PI / 180.0;
@@ -465,7 +521,7 @@ fn kinda_astar_search<'a>(
 ) -> Option<RoutingPath<'a>> {
     let start_node = id_to_node.get(&start_node_id).expect("start node not found");
     let dest_node = id_to_node.get(&dest_node_id).expect("destination node not found");
-    let mut visited_segments: HashSet<(NodeId, NodeId)> = HashSet::new();
+    let mut visited_segments: HashSet<OrderedNodePair> = HashSet::new();
     let initial_heuristic = 0.0 + sphere_distance_meters(
         start_node.lat(), start_node.lon(),
         dest_node.lat(), dest_node.lon(),
@@ -502,7 +558,7 @@ fn kinda_astar_search<'a>(
             debug_node_ids.contains(&path.current_node.id),
         );
         for neighbor in &neighbors {
-            if !visited_segments.insert((path.current_node.id, neighbor.id)) {
+            if !visited_segments.insert((path.current_node.id, neighbor.id).into()) {
                 // we have taken this segment before
                 // prevent looping infinitely
                 continue;
@@ -544,7 +600,7 @@ fn shortest_paths<'a>(
 ) -> HashMap<NodeId, LengthPath<'a>> {
     let start_node = id_to_node.get(&start_node_id).expect("start node not found");
     let mut dest_node_to_path: HashMap<NodeId, LengthPath> = HashMap::new();
-    let mut visited_segments: HashSet<(NodeId, NodeId)> = HashSet::new();
+    let mut visited_segments: HashSet<OrderedNodePair> = HashSet::new();
 
     let mut paths: Vec<LengthPath<'a>> = vec![LengthPath {
         current_segments: vec![],
@@ -581,7 +637,7 @@ fn shortest_paths<'a>(
 
         for &neighbor in &neighbors {
             // have I taken this path before?
-            if !visited_segments.insert((path.current_node.id, neighbor.id)) {
+            if !visited_segments.insert((path.current_node.id, neighbor.id).into()) {
                 // yes
                 //eprintln!("    I've gone this path before");
                 continue;
@@ -618,7 +674,8 @@ fn longest_path_from<'a>(
     debug_node_ids: &HashSet<NodeId>,
 ) -> Option<LengthPath<'a>> {
     let mut longest_path: Option<LengthPath<'a>> = None;
-    let mut visited_segments: HashSet<(NodeId, NodeId)> = HashSet::new();
+    // unordered node pair; disallow allow passing same track in both directions
+    let mut visited_segments: HashSet<UnorderedNodePair> = HashSet::new();
 
     let start_node = id_to_node.get(&start_node_id)
         .expect("start node not found");
@@ -653,7 +710,7 @@ fn longest_path_from<'a>(
         );
 
         for &neighbor in &neighbors {
-            if !visited_segments.insert((path.current_node.id, neighbor.id)) {
+            if !visited_segments.insert((path.current_node.id, neighbor.id).into()) {
                 continue;
             }
 
