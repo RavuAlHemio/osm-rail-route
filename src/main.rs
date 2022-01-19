@@ -351,20 +351,33 @@ fn remove_from<T, P: FnMut(&T) -> bool>(what: &mut Vec<T>, mut pred: P) {
 
 fn whittle_down_neighbors(base_node: &Node, neighbors: &mut Vec<&Node>, prev_node_opt: Option<&Node>) {
     const MAX_CROSSING_BEARING_DIFF_DEG: f64 = 15.0;
+    const MAX_UNMARKED_BEARING_DIFF_DEG: f64 = 30.0;
 
     let debug = base_node.id.0 == 278895914;
+    if debug { eprintln!("checking {}", base_node.id.0); }
 
     // allow anything if we don't know the previous node
     let prev_node = match prev_node_opt {
         Some(pn) => pn,
         None => {
-            if debug { eprintln!("allowing everything"); }
+            if debug { eprintln!("  allowing everything"); }
             return;
         },
     };
 
-    if neighbors.len() < 2 {
-        // pass-through node or dead end; allow it
+    if debug { eprintln!("  previous: {}", prev_node.id.0); }
+
+    if neighbors.len() == 1 {
+        // dead end; nowhere to go
+        if debug { eprintln!("  dead end"); }
+        neighbors.clear();
+        return;
+    }
+
+    if neighbors.len() == 2 {
+        // pass-through node; remove the previous node
+        neighbors.retain(|n| n.id != prev_node.id);
+        if debug { eprintln!("  pass-through"); }
         return;
     }
 
@@ -420,16 +433,26 @@ fn whittle_down_neighbors(base_node: &Node, neighbors: &mut Vec<&Node>, prev_nod
             .min_by(|(bd1, _n1), (bd2, _n2)| bd1.partial_cmp(bd2).unwrap())
             .unwrap();
 
+        if debug { eprintln!("  crossing; keeping best match"); }
+
         neighbors.retain(|n| n.id == bearing_neighbor.id);
         return;
     }
 
-    // heuristic for switches and unmarked intersecting ways: max 30°
+    // heuristic for switches and unmarked intersecting ways: upper limit
+    if debug {
+        let neigh_ids: Vec<i64> = neighbors.iter().map(|n| n.id.0).collect();
+        eprintln!("  switch/intersection; keeping everything < {}° (before: {:?})", MAX_UNMARKED_BEARING_DIFF_DEG, neigh_ids);
+    }
     neighbors.retain(|n| {
         let neigh_bearing = bearing(base_node, n);
         let bearing_diff_deg = bearing_diff_rad(prev_bearing, neigh_bearing).abs() * 180.0 / PI;
-        bearing_diff_deg < 30.0
+        bearing_diff_deg < MAX_UNMARKED_BEARING_DIFF_DEG
     });
+    if debug {
+        let neigh_ids: Vec<i64> = neighbors.iter().map(|n| n.id.0).collect();
+        eprintln!("    after: {:?}", neigh_ids);
+    }
 }
 
 
