@@ -1,10 +1,12 @@
 "use strict";
 
+import * as geojson from "geojson";
 import * as leaflet from "leaflet";
 import "leaflet-providers";
 
 export module TramRoute {
     let theMap: leaflet.Map;
+    let cutOffAfter: number|null = null;
 
     export function initializeMap(): void {
         // get the name of the map
@@ -16,6 +18,10 @@ export module TramRoute {
                 mapElem.textContent = "You must specify a map to load.";
             }
             return;
+        }
+        let cutOffAfterString = queryParams.get("cutoff");
+        if (cutOffAfterString !== null && /^[0-9]+$/.test(cutOffAfterString)) {
+            cutOffAfter = +cutOffAfterString;
         }
 
         // construct the map URL
@@ -36,7 +42,8 @@ export module TramRoute {
 
     function mapDownloaded(xhr: XMLHttpRequest): void {
         // store downloaded map
-        let geoJson = JSON.parse(xhr.responseText);
+        let geoJson: geojson.GeoJsonObject = JSON.parse(xhr.responseText);
+        cutOffGeoJson(geoJson);
 
         // set up Leaflet
         let baseLayers = obtainBaseLayers();
@@ -66,6 +73,63 @@ export module TramRoute {
             ["OSM (Translucent)", leaflet.tileLayer.provider("OpenStreetMap.Mapnik", { opacity: 0.5 })],
             ["OSM", leaflet.tileLayer.provider("OpenStreetMap.Mapnik")],
         ];
+    }
+
+    function cutOffGeoJson(geoJson: geojson.GeoJsonObject) {
+        if (cutOffAfter === null) {
+            return;
+        }
+
+        switch (geoJson.type) {
+            case "LineString":
+                let lineString = <geojson.LineString>geoJson;
+                if (lineString.coordinates.length > cutOffAfter) {
+                    lineString.coordinates.length = cutOffAfter;
+                }
+                break;
+
+            case "MultiLineString":
+                let multiLineString = <geojson.MultiLineString>geoJson;
+                for (let i = 0; i < multiLineString.coordinates.length; i++) {
+                    if (multiLineString.coordinates[i].length > cutOffAfter) {
+                        multiLineString.coordinates[i].length = cutOffAfter;
+                    }
+                }
+                break;
+
+            case "MultiPoint":
+                let multiPoint = <geojson.MultiPoint>geoJson;
+                if (multiPoint.coordinates.length > cutOffAfter) {
+                    multiPoint.coordinates.length = cutOffAfter;
+                }
+                break;
+
+            case "MultiPolygon":
+                let multiPolygon = <geojson.MultiPolygon>geoJson;
+                if (multiPolygon.coordinates.length > cutOffAfter) {
+                    multiPolygon.coordinates.length = cutOffAfter;
+                }
+                break;
+
+            case "Feature":
+                let feature = <geojson.Feature>geoJson;
+                cutOffGeoJson(feature.geometry);
+                break;
+
+            case "FeatureCollection":
+                let featureCollection = <geojson.FeatureCollection>geoJson;
+                for (let i = 0; i < featureCollection.features.length; i++) {
+                    cutOffGeoJson(featureCollection.features[i]);
+                }
+                break;
+
+            case "GeometryCollection":
+                let geometryCollection = <geojson.GeometryCollection>geoJson;
+                for (let i = 0; i < geometryCollection.geometries.length; i++) {
+                    cutOffGeoJson(geometryCollection.geometries[i]);
+                }
+                break;
+        }
     }
 }
 
