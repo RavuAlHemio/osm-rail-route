@@ -950,37 +950,37 @@ fn main() {
                 .filter_map(|s| find_closest_node(s, way_nodes.iter().map(|n| *n)))
                 .map(|n| n.id)
                 .collect();
-            let mut longest_shortest_path: Option<(NodeId, NodeId, LengthPath)> = None;
 
-            for (i, &start_node_id) in stop_closest_node_ids.iter().enumerate() {
-                let mut other_node_ids = stop_closest_node_ids.clone();
-                other_node_ids.remove(&start_node_id);
+            let started_counter: AtomicUsize = AtomicUsize::new(0);
+            let longest_shortest_path_opt = stop_closest_node_ids.par_iter()
+                .inspect(|_| {
+                    let counter = started_counter.fetch_add(1, Ordering::SeqCst);
+                    eprintlntime!(start_time, "started item {}/{}", counter, stop_closest_node_ids.len());
+                })
+                .filter_map(|&start_node_id| {
+                    let mut other_node_ids = stop_closest_node_ids.clone();
+                    other_node_ids.remove(&start_node_id);
 
-                let mut foundlings = shortest_paths(
-                    &id_to_node,
-                    &node_to_neighbors,
-                    start_node_id,
-                    &other_node_ids,
-                    &debug_node_ids,
+                    let mut foundlings = shortest_paths(
+                        &id_to_node,
+                        &node_to_neighbors,
+                        start_node_id,
+                        &other_node_ids,
+                        &debug_node_ids,
+                    );
+                    eprintlntime!(start_time, "{:?}: {} other IDs, {} paths found", start_node_id, other_node_ids.len(), foundlings.len());
+                    foundlings
+                        .drain()
+                        .map(|(_i, p)| p)
+                        .max_by(|p1, p2|
+                            p1.total_distance.partial_cmp(&p2.total_distance).unwrap()
+                        )
+                })
+                .max_by(|left, right|
+                    left.total_distance.partial_cmp(&right.total_distance).unwrap()
                 );
-                eprintlntime!(start_time, "{}/{} from {:?}: {} other IDs, {} paths found", i+1, stop_closest_node_ids.len(), start_node_id, other_node_ids.len(), foundlings.len());
 
-                for (dest_node_id, path) in foundlings.drain() {
-                    if let Some((_, _, longest_shortest_path_detail)) = &longest_shortest_path {
-                        if longest_shortest_path_detail.total_distance < path.total_distance {
-                            eprintlntime!(start_time, "new longest shortest path is between {:?} and {:?} ({})", start_node_id, dest_node_id, &path.total_distance);
-                            longest_shortest_path = Some((start_node_id, dest_node_id, path));
-                        }
-                        // only remember the shortest path that is the longest
-                    } else {
-                        eprintlntime!(start_time, "first longest shortest path is between {:?} and {:?} ({})", start_node_id, dest_node_id, &path.total_distance);
-                        longest_shortest_path = Some((start_node_id, dest_node_id, path));
-                    }
-                }
-            }
-
-            let longest_shortest_path_detail = longest_shortest_path
-                .map(|(_, _, sp)| sp)
+            let longest_shortest_path_detail = longest_shortest_path_opt
                 .expect("no path found");
             eprintlntime!(start_time, "done! longest shortest path distance: {}", longest_shortest_path_detail.total_distance);
             path_to_geojson(longest_shortest_path_detail.current_segments.iter())
