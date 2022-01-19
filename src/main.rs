@@ -15,6 +15,7 @@ struct Opts {
     pub osm_path: PathBuf,
     #[clap(subcommand)] mode: OptsMode,
     #[clap(short, long, takes_value = true, multiple_occurrences = true)] pub debug_node_ids: Vec<i64>,
+    #[clap(short, long)] pub directional_segments: bool,
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
 enum OptsMode {
@@ -192,6 +193,42 @@ impl UnorderedNodePair {
 impl From<(NodeId, NodeId)> for UnorderedNodePair {
     fn from(pair: (NodeId, NodeId)) -> Self {
         Self::new(pair.0, pair.1)
+    }
+}
+
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum NodePairSet {
+    Ordered(HashSet<OrderedNodePair>),
+    Unordered(HashSet<UnorderedNodePair>),
+}
+impl NodePairSet {
+    pub fn new_ordered() -> Self {
+        Self::Ordered(HashSet::new())
+    }
+    pub fn new_unordered() -> Self {
+        Self::Unordered(HashSet::new())
+    }
+    pub fn new_with_directionality(directional: bool) -> Self {
+        if directional {
+            Self::new_ordered()
+        } else {
+            Self::new_unordered()
+        }
+    }
+    pub fn insert(&mut self, node1: NodeId, node2: NodeId) -> bool {
+        // true if it's a new entry
+        // false if it's already contained
+        match self {
+            Self::Ordered(os) => os.insert(OrderedNodePair::new(node1, node2)),
+            Self::Unordered(us) => us.insert(UnorderedNodePair::new(node1, node2)),
+        }
+    }
+    pub fn contains(&self, node1: NodeId, node2: NodeId) -> bool {
+        match self {
+            Self::Ordered(os) => os.contains(&OrderedNodePair::new(node1, node2)),
+            Self::Unordered(us) => us.contains(&UnorderedNodePair::new(node1, node2)),
+        }
     }
 }
 
@@ -523,10 +560,11 @@ fn kinda_astar_search<'a>(
     start_node_id: NodeId,
     dest_node_id: NodeId,
     debug_node_ids: &HashSet<NodeId>,
+    segment_directionality: bool,
 ) -> Option<RoutingPath<'a>> {
     let start_node = id_to_node.get(&start_node_id).expect("start node not found");
     let dest_node = id_to_node.get(&dest_node_id).expect("destination node not found");
-    let mut visited_segments: HashSet<OrderedNodePair> = HashSet::new();
+    let mut visited_segments = NodePairSet::new_with_directionality(segment_directionality);
     let initial_heuristic = 0.0 + sphere_distance_meters(
         start_node.lat(), start_node.lon(),
         dest_node.lat(), dest_node.lon(),
@@ -563,7 +601,7 @@ fn kinda_astar_search<'a>(
             debug_node_ids.contains(&path.current_node.id),
         );
         for neighbor in &neighbors {
-            if !visited_segments.insert((path.current_node.id, neighbor.id).into()) {
+            if !visited_segments.insert(path.current_node.id, neighbor.id) {
                 // we have taken this segment before
                 // prevent looping infinitely
                 continue;
@@ -602,10 +640,11 @@ fn shortest_paths<'a>(
     start_node_id: NodeId,
     dest_nodes: &HashSet<NodeId>,
     debug_node_ids: &HashSet<NodeId>,
+    segment_directionality: bool,
 ) -> HashMap<NodeId, LengthPath<'a>> {
     let start_node = id_to_node.get(&start_node_id).expect("start node not found");
     let mut dest_node_to_path: HashMap<NodeId, LengthPath> = HashMap::new();
-    let mut visited_segments: HashSet<OrderedNodePair> = HashSet::new();
+    let mut visited_segments = NodePairSet::new_with_directionality(segment_directionality);
 
     let mut paths: Vec<LengthPath<'a>> = vec![LengthPath {
         current_segments: vec![],
@@ -642,7 +681,7 @@ fn shortest_paths<'a>(
 
         for &neighbor in &neighbors {
             // have I taken this path before?
-            if !visited_segments.insert((path.current_node.id, neighbor.id).into()) {
+            if !visited_segments.insert(path.current_node.id, neighbor.id) {
                 // yes
                 //eprintln!("    I've gone this path before");
                 continue;
@@ -677,10 +716,11 @@ fn longest_path_from<'a>(
     node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
     start_node_id: NodeId,
     debug_node_ids: &HashSet<NodeId>,
+    segment_directionality: bool,
 ) -> Option<LengthPath<'a>> {
     let mut longest_path: Option<LengthPath<'a>> = None;
     // unordered node pair; disallow allow passing same track in both directions
-    let mut visited_segments: HashSet<UnorderedNodePair> = HashSet::new();
+    let mut visited_segments = NodePairSet::new_with_directionality(segment_directionality);
 
     let start_node = id_to_node.get(&start_node_id)
         .expect("start node not found");
@@ -715,7 +755,7 @@ fn longest_path_from<'a>(
         );
 
         for &neighbor in &neighbors {
-            if !visited_segments.insert((path.current_node.id, neighbor.id).into()) {
+            if !visited_segments.insert(path.current_node.id, neighbor.id) {
                 continue;
             }
 
@@ -895,6 +935,7 @@ fn main() {
                 start_node.id,
                 dest_node.id,
                 &debug_node_ids,
+                opts.directional_segments,
             );
             eprintlntime!(start_time, "search completed");
             let path = match path_opt {
@@ -921,6 +962,7 @@ fn main() {
                 start_node.id,
                 &stop_closest_node_ids,
                 &debug_node_ids,
+                opts.directional_segments,
             );
             eprintlntime!(start_time, "search completed");
 
@@ -972,6 +1014,7 @@ fn main() {
                         start_node_id,
                         &other_node_ids,
                         &debug_node_ids,
+                        opts.directional_segments,
                     );
                     eprintlntime!(start_time, "{:?}: {} other IDs, {} paths found", start_node_id, other_node_ids.len(), foundlings.len());
                     foundlings
@@ -1003,6 +1046,7 @@ fn main() {
                         &node_to_neighbors,
                         start_node_id,
                         &debug_node_ids,
+                        opts.directional_segments,
                     )
                 })
                 .max_by(|left, right| left.total_distance.partial_cmp(&right.total_distance).unwrap());
