@@ -6,7 +6,7 @@ import "leaflet-providers";
 
 export module TramRoute {
     let theMap: leaflet.Map;
-    let cutOffAfter: number|null = null;
+    let segmentSlice: [number, number]|null = null;
 
     export function initializeMap(): void {
         // get the name of the map
@@ -19,9 +19,13 @@ export module TramRoute {
             }
             return;
         }
-        let cutOffAfterString = queryParams.get("cutoff");
-        if (cutOffAfterString !== null && /^[0-9]+$/.test(cutOffAfterString)) {
-            cutOffAfter = +cutOffAfterString;
+        let sliceString = queryParams.get("slice");
+        if (sliceString !== null) {
+            if (/^[0-9]+$/.test(sliceString)) {
+                segmentSlice = [0, +sliceString];
+            } else if (/^[0-9]+-[0-9]+$/.test(sliceString)) {
+                segmentSlice = <[number, number]>sliceString.split("-").map(v => +v);
+            }
         }
 
         // construct the map URL
@@ -75,40 +79,39 @@ export module TramRoute {
         ];
     }
 
+    function sliceSegments<T>(array: T[]): T[] {
+        if (segmentSlice === null) {
+            return array;
+        }
+        return array.slice(segmentSlice[0], segmentSlice[1]);
+    }
+
     function cutOffGeoJson(geoJson: geojson.GeoJsonObject) {
-        if (cutOffAfter === null) {
+        if (segmentSlice === null) {
             return;
         }
 
         switch (geoJson.type) {
             case "LineString":
                 let lineString = <geojson.LineString>geoJson;
-                if (lineString.coordinates.length > cutOffAfter) {
-                    lineString.coordinates.length = cutOffAfter;
-                }
+                lineString.coordinates = sliceSegments(lineString.coordinates);
                 break;
 
             case "MultiLineString":
                 let multiLineString = <geojson.MultiLineString>geoJson;
                 for (let i = 0; i < multiLineString.coordinates.length; i++) {
-                    if (multiLineString.coordinates[i].length > cutOffAfter) {
-                        multiLineString.coordinates[i].length = cutOffAfter;
-                    }
+                    multiLineString.coordinates[i] = sliceSegments(multiLineString.coordinates[i]);
                 }
                 break;
 
             case "MultiPoint":
                 let multiPoint = <geojson.MultiPoint>geoJson;
-                if (multiPoint.coordinates.length > cutOffAfter) {
-                    multiPoint.coordinates.length = cutOffAfter;
-                }
+                multiPoint.coordinates = sliceSegments(multiPoint.coordinates);
                 break;
 
             case "MultiPolygon":
                 let multiPolygon = <geojson.MultiPolygon>geoJson;
-                if (multiPolygon.coordinates.length > cutOffAfter) {
-                    multiPolygon.coordinates.length = cutOffAfter;
-                }
+                multiPolygon.coordinates = sliceSegments(multiPolygon.coordinates);
                 break;
 
             case "Feature":
