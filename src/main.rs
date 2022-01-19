@@ -412,6 +412,11 @@ fn whittle_down_neighbors(base_node: &Node, neighbors: &mut Vec<&Node>, prev_nod
 
     if debug { eprintln!("checking {}", base_node.id.0); }
 
+    if neighbors.len() == 0 {
+        if debug { eprintln!("  no neighbors?!"); }
+        return;
+    }
+
     // allow anything if we don't know the previous node
     let prev_node = match prev_node_opt {
         Some(pn) => pn,
