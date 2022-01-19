@@ -14,6 +14,7 @@ use rayon::prelude::*;
 struct Opts {
     pub osm_path: PathBuf,
     #[clap(subcommand)] mode: OptsMode,
+    #[clap(short, long, takes_value = true, multiple_occurrences = true)] pub debug_node_ids: Vec<i64>,
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
 enum OptsMode {
@@ -349,11 +350,10 @@ fn remove_from<T, P: FnMut(&T) -> bool>(what: &mut Vec<T>, mut pred: P) {
 }
 
 
-fn whittle_down_neighbors(base_node: &Node, neighbors: &mut Vec<&Node>, prev_node_opt: Option<&Node>) {
+fn whittle_down_neighbors(base_node: &Node, neighbors: &mut Vec<&Node>, prev_node_opt: Option<&Node>, debug: bool) {
     const MAX_CROSSING_BEARING_DIFF_DEG: f64 = 15.0;
     const MAX_UNMARKED_BEARING_DIFF_DEG: f64 = 30.0;
 
-    let debug = base_node.id.0 == 278895914;
     if debug { eprintln!("checking {}", base_node.id.0); }
 
     // allow anything if we don't know the previous node
@@ -461,6 +461,7 @@ fn kinda_astar_search<'a>(
     node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
     start_node_id: NodeId,
     dest_node_id: NodeId,
+    debug_node_ids: &HashSet<NodeId>,
 ) -> Option<RoutingPath<'a>> {
     let start_node = id_to_node.get(&start_node_id).expect("start node not found");
     let dest_node = id_to_node.get(&dest_node_id).expect("destination node not found");
@@ -494,7 +495,12 @@ fn kinda_astar_search<'a>(
         };
 
         let prev_node_opt = path.previous_node();
-        whittle_down_neighbors(&path.current_node, &mut neighbors, prev_node_opt);
+        whittle_down_neighbors(
+            &path.current_node,
+            &mut neighbors,
+            prev_node_opt,
+            debug_node_ids.contains(&path.current_node.id),
+        );
         for neighbor in &neighbors {
             if !visited_segments.insert((path.current_node.id, neighbor.id)) {
                 // we have taken this segment before
@@ -534,6 +540,7 @@ fn shortest_paths<'a>(
     node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
     start_node_id: NodeId,
     dest_nodes: &HashSet<NodeId>,
+    debug_node_ids: &HashSet<NodeId>,
 ) -> HashMap<NodeId, LengthPath<'a>> {
     let start_node = id_to_node.get(&start_node_id).expect("start node not found");
     let mut dest_node_to_path: HashMap<NodeId, LengthPath> = HashMap::new();
@@ -569,6 +576,7 @@ fn shortest_paths<'a>(
             &path.current_node,
             &mut neighbors,
             path.current_segments.last().map(|ls| ls.start_node),
+            debug_node_ids.contains(&path.current_node.id),
         );
 
         for &neighbor in &neighbors {
@@ -607,6 +615,7 @@ fn longest_path_from<'a>(
     id_to_node: &'a HashMap<NodeId, &Node>,
     node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
     start_node_id: NodeId,
+    debug_node_ids: &HashSet<NodeId>,
 ) -> Option<LengthPath<'a>> {
     let mut longest_path: Option<LengthPath<'a>> = None;
     let mut visited_segments: HashSet<(NodeId, NodeId)> = HashSet::new();
@@ -640,6 +649,7 @@ fn longest_path_from<'a>(
             &path.current_node,
             &mut neighbors,
             path.current_segments.last().map(|ls| ls.start_node),
+            debug_node_ids.contains(&path.current_node.id),
         );
 
         for &neighbor in &neighbors {
@@ -730,6 +740,9 @@ fn path_to_geojson<'a, I: Iterator<Item = &'a PathSegment<'a>>>(segments: I) -> 
 
 fn main() {
     let opts = Opts::parse();
+    let debug_node_ids: HashSet<NodeId> = opts.debug_node_ids.iter()
+        .map(|dnid| NodeId(*dnid))
+        .collect();
 
     let start_time = Instant::now();
 
@@ -813,6 +826,7 @@ fn main() {
                 &node_to_neighbors,
                 start_node.id,
                 dest_node.id,
+                &debug_node_ids,
             );
             eprintlntime!(start_time, "search completed");
             let path = match path_opt {
@@ -838,6 +852,7 @@ fn main() {
                 &node_to_neighbors,
                 start_node.id,
                 &stop_closest_node_ids,
+                &debug_node_ids,
             );
             eprintlntime!(start_time, "search completed");
 
@@ -883,6 +898,7 @@ fn main() {
                     &node_to_neighbors,
                     start_node_id,
                     &other_node_ids,
+                    &debug_node_ids,
                 );
                 eprintlntime!(start_time, "{}/{} from {:?}: {} other IDs, {} paths found", i+1, stop_closest_node_ids.len(), start_node_id, other_node_ids.len(), foundlings.len());
 
@@ -918,6 +934,7 @@ fn main() {
                         &id_to_node,
                         &node_to_neighbors,
                         start_node_id,
+                        &debug_node_ids,
                     )
                 })
                 .max_by(|left, right| left.total_distance.partial_cmp(&right.total_distance).unwrap());
