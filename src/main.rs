@@ -408,40 +408,6 @@ fn calculate_neighbors(ways: &[&Way]) -> HashMap<NodeId, HashSet<NodeId>> {
     node_to_neighbors
 }
 
-fn remove_while<T, P: FnMut(&T) -> bool>(what: &mut Vec<T>, mut pred: P) {
-    let mut we_are_done = false;
-    what.retain(|v| {
-        if we_are_done {
-            // predicate has returned false before; keep this item
-            true
-        } else if pred(v) {
-            // predicate has returned true; remove it
-            false
-        } else {
-            // predicate has returned false for the first time; keep the rest
-            we_are_done = true;
-            true
-        }
-    })
-}
-
-fn remove_from<T, P: FnMut(&T) -> bool>(what: &mut Vec<T>, mut pred: P) {
-    let mut we_are_done = false;
-    what.retain(|v| {
-        if we_are_done {
-            // predicate has returned true before; remove this item
-            false
-        } else if pred(v) {
-            // predicate has returned true; start removing
-            we_are_done = true;
-            false
-        } else {
-            // predicate has returned false; keep this item
-            true
-        }
-    })
-}
-
 
 fn whittle_down_neighbors(base_node: &Node, neighbors: &mut Vec<&Node>, prev_node_opt: Option<&Node>, debug: bool) {
     const MAX_CROSSING_BEARING_DIFF_DEG: f64 = 15.0;
