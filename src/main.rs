@@ -233,6 +233,17 @@ impl NodePairSet {
 }
 
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum OneWay {
+    Opposite,
+    No,
+    Along,
+}
+impl Default for OneWay {
+    fn default() -> Self { OneWay::No }
+}
+
+
 fn bearing(node_a: &Node, node_b: &Node) -> f64 {
     let lat_a = node_a.lat() * PI / 180.0;
     let lat_b = node_b.lat() * PI / 180.0;
@@ -385,12 +396,24 @@ fn remove_invalid_ways(id_to_node: &HashMap<NodeId, &Node>, ways: &mut Vec<&Way>
     ways.retain(|w| !w.nodes.iter().any(|w| !id_to_node.contains_key(w)));
 }
 
-fn calculate_neighbors(ways: &[&Way]) -> HashMap<NodeId, HashSet<NodeId>> {
+fn calculate_neighbors(ways: &[&Way]) -> (HashMap<NodeId, HashSet<NodeId>>, HashSet<(NodeId, NodeId)>) {
     let mut node_to_neighbors = HashMap::new();
+    let mut one_way_pairs = HashSet::new();
     for way in ways {
         if way.nodes.len() < 2 {
             continue;
         }
+        let one_way = if let Some(ow) = way.tags.get("oneway") {
+            if ow == "yes" || ow == "true" || ow == "1" {
+                OneWay::Along
+            } else if ow == "-1" || ow == "reverse" {
+                OneWay::Opposite
+            } else {
+                OneWay::No
+            }
+        } else {
+            OneWay::No
+        };
 
         for i in 0..way.nodes.len()-1 {
             let one_id = way.nodes[i];
@@ -403,13 +426,40 @@ fn calculate_neighbors(ways: &[&Way]) -> HashMap<NodeId, HashSet<NodeId>> {
             let other_neighbors = node_to_neighbors.entry(other_id)
                 .or_insert_with(|| HashSet::new());
             other_neighbors.insert(one_id);
+
+            if one_way == OneWay::Along {
+                one_way_pairs.insert((one_id, other_id));
+            } else if one_way == OneWay::Opposite {
+                one_way_pairs.insert((other_id, one_id));
+            }
         }
     }
-    node_to_neighbors
+    (node_to_neighbors, one_way_pairs)
 }
 
+fn remove_one_way_neighbors(
+    base_node: &Node,
+    neighbors: &mut Vec<&Node>,
+    one_way_pairs: &HashSet<(NodeId, NodeId)>,
+    debug: bool,
+) {
+    // it is an invalid neighbor if there exists a one-way pair in the opposite direction
+    neighbors.retain(
+        |n| !one_way_pairs.contains(&(n.id, base_node.id))
+    );
+    if debug {
+        let neigh_ids: Vec<i64> = neighbors.iter().map(|n| n.id.0).collect();
+        eprintln!("  after removing against-one-ways: {:?}", neigh_ids);
+    }
+}
 
-fn whittle_down_neighbors(base_node: &Node, neighbors: &mut Vec<&Node>, prev_node_opt: Option<&Node>, debug: bool) {
+fn whittle_down_neighbors(
+    base_node: &Node,
+    neighbors: &mut Vec<&Node>,
+    prev_node_opt: Option<&Node>,
+    one_way_pairs: &HashSet<(NodeId, NodeId)>,
+    debug: bool
+) {
     const MAX_CROSSING_BEARING_DIFF_DEG: f64 = 15.0;
     const MAX_UNMARKED_BEARING_DIFF_DEG: f64 = 30.0;
 
@@ -424,7 +474,8 @@ fn whittle_down_neighbors(base_node: &Node, neighbors: &mut Vec<&Node>, prev_nod
     let prev_node = match prev_node_opt {
         Some(pn) => pn,
         None => {
-            if debug { eprintln!("  allowing everything"); }
+            if debug { eprintln!("  allowing everything (except going against one-ways)"); }
+            remove_one_way_neighbors(base_node, neighbors, one_way_pairs, debug);
             return;
         },
     };
@@ -442,6 +493,7 @@ fn whittle_down_neighbors(base_node: &Node, neighbors: &mut Vec<&Node>, prev_nod
         // pass-through node; remove the previous node
         neighbors.retain(|n| n.id != prev_node.id);
         if debug { eprintln!("  pass-through"); }
+        remove_one_way_neighbors(base_node, neighbors, one_way_pairs, debug);
         return;
     }
 
@@ -500,6 +552,7 @@ fn whittle_down_neighbors(base_node: &Node, neighbors: &mut Vec<&Node>, prev_nod
         if debug { eprintln!("  crossing; keeping best match"); }
 
         neighbors.retain(|n| n.id == bearing_neighbor.id);
+        remove_one_way_neighbors(base_node, neighbors, one_way_pairs, debug);
         return;
     }
 
@@ -517,12 +570,14 @@ fn whittle_down_neighbors(base_node: &Node, neighbors: &mut Vec<&Node>, prev_nod
         let neigh_ids: Vec<i64> = neighbors.iter().map(|n| n.id.0).collect();
         eprintln!("    after: {:?}", neigh_ids);
     }
+    remove_one_way_neighbors(base_node, neighbors, one_way_pairs, debug);
 }
 
 
 fn kinda_astar_search<'a>(
     id_to_node: &'a HashMap<NodeId, &Node>,
     node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
+    one_way_pairs: &HashSet<(NodeId, NodeId)>,
     start_node_id: NodeId,
     dest_node_id: NodeId,
     debug_node_ids: &HashSet<NodeId>,
@@ -564,6 +619,7 @@ fn kinda_astar_search<'a>(
             &path.current_node,
             &mut neighbors,
             prev_node_opt,
+            one_way_pairs,
             debug_node_ids.contains(&path.current_node.id),
         );
         for neighbor in &neighbors {
@@ -603,6 +659,7 @@ fn kinda_astar_search<'a>(
 fn shortest_paths<'a>(
     id_to_node: &'a HashMap<NodeId, &Node>,
     node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
+    one_way_pairs: &HashSet<(NodeId, NodeId)>,
     start_node_id: NodeId,
     dest_nodes: &HashSet<NodeId>,
     debug_node_ids: &HashSet<NodeId>,
@@ -642,6 +699,7 @@ fn shortest_paths<'a>(
             &path.current_node,
             &mut neighbors,
             path.current_segments.last().map(|ls| ls.start_node),
+            one_way_pairs,
             debug_node_ids.contains(&path.current_node.id),
         );
 
@@ -680,6 +738,7 @@ fn shortest_paths<'a>(
 fn longest_path_from<'a>(
     id_to_node: &'a HashMap<NodeId, &Node>,
     node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
+    one_way_pairs: &HashSet<(NodeId, NodeId)>,
     start_node_id: NodeId,
     debug_node_ids: &HashSet<NodeId>,
     segment_directionality: bool,
@@ -717,6 +776,7 @@ fn longest_path_from<'a>(
             &path.current_node,
             &mut neighbors,
             path.current_segments.last().map(|ls| ls.start_node),
+            one_way_pairs,
             debug_node_ids.contains(&path.current_node.id),
         );
 
@@ -879,7 +939,7 @@ fn main() {
         return;
     }
 
-    let node_to_neighbors = calculate_neighbors(&ways);
+    let (node_to_neighbors, one_way_pairs) = calculate_neighbors(&ways);
     eprintlntime!(start_time, "neighbors calculated");
 
     let geojson = match &opts.mode {
@@ -898,6 +958,7 @@ fn main() {
             let path_opt = kinda_astar_search(
                 &id_to_node,
                 &node_to_neighbors,
+                &one_way_pairs,
                 start_node.id,
                 dest_node.id,
                 &debug_node_ids,
@@ -925,6 +986,7 @@ fn main() {
             let foundlings = shortest_paths(
                 &id_to_node,
                 &node_to_neighbors,
+                &one_way_pairs,
                 start_node.id,
                 &stop_closest_node_ids,
                 &debug_node_ids,
@@ -977,6 +1039,7 @@ fn main() {
                     let mut foundlings = shortest_paths(
                         &id_to_node,
                         &node_to_neighbors,
+                        &one_way_pairs,
                         start_node_id,
                         &other_node_ids,
                         &debug_node_ids,
@@ -1010,6 +1073,7 @@ fn main() {
                     longest_path_from(
                         &id_to_node,
                         &node_to_neighbors,
+                        &one_way_pairs,
                         start_node_id,
                         &debug_node_ids,
                         opts.directional_segments,
