@@ -71,6 +71,7 @@ impl<'a> PathSegment<'a> {
 #[derive(Clone, Debug, PartialEq)]
 struct RoutingPath<'a> {
     pub current_segments: Vec<PathSegment<'a>>,
+    pub visited_segments: NodePairSet,
     pub current_node: &'a Node,
     pub total_distance: f64,
     pub heuristic: f64,
@@ -119,12 +120,35 @@ impl<'a> RoutingPath<'a> {
     pub fn previous_node(&self) -> Option<&Node> {
         self.to_segments().last().map(|seg| seg.start_node)
     }
+
+    pub fn adding_segment(
+        &self,
+        new_node: &'a Node,
+        new_visited_segments: NodePairSet,
+        new_heuristic: f64,
+    ) -> Self {
+        let new_seg = PathSegment::new_with_sphere_distance(
+            self.current_node,
+            new_node,
+        );
+        let new_total_distance = self.total_distance + new_seg.distance;
+        let mut new_current_segments = self.current_segments.clone();
+        new_current_segments.push(new_seg);
+        Self {
+            current_segments: new_current_segments,
+            visited_segments: new_visited_segments,
+            current_node: new_node,
+            total_distance: new_total_distance,
+            heuristic: new_heuristic,
+        }
+    }
 }
 
 
 #[derive(Clone, Debug, PartialEq)]
 struct LengthPath<'a> {
     pub current_segments: Vec<PathSegment<'a>>,
+    pub visited_segments: NodePairSet,
     pub current_node: &'a Node,
     pub total_distance: f64,
 }
@@ -140,6 +164,26 @@ impl<'a> LengthPath<'a> {
             ret.push(segment.end_node);
         }
         ret
+    }
+
+    pub fn adding_segment(
+        &self,
+        new_node: &'a Node,
+        new_visited_segments: NodePairSet,
+    ) -> Self {
+        let new_seg = PathSegment::new_with_sphere_distance(
+            self.current_node,
+            new_node,
+        );
+        let new_total_distance = self.total_distance + new_seg.distance;
+        let mut new_current_segments = self.current_segments.clone();
+        new_current_segments.push(new_seg);
+        Self {
+            current_segments: new_current_segments,
+            visited_segments: new_visited_segments,
+            current_node: new_node,
+            total_distance: new_total_distance,
+        }
     }
 }
 
@@ -597,7 +641,6 @@ fn kinda_astar_search<'a>(
 ) -> Option<RoutingPath<'a>> {
     let start_node = id_to_node.get(&start_node_id).expect("start node not found");
     let dest_node = id_to_node.get(&dest_node_id).expect("destination node not found");
-    let mut visited_segments = NodePairSet::new_with_directionality(segment_directionality);
     let initial_heuristic = 0.0 + sphere_distance_meters(
         start_node.lat(), start_node.lon(),
         dest_node.lat(), dest_node.lon(),
@@ -605,6 +648,7 @@ fn kinda_astar_search<'a>(
 
     let mut paths: Vec<RoutingPath<'a>> = vec![RoutingPath {
         current_segments: vec![],
+        visited_segments: NodePairSet::new_with_directionality(segment_directionality),
         current_node: start_node,
         total_distance: 0.0,
         heuristic: initial_heuristic,
@@ -635,27 +679,23 @@ fn kinda_astar_search<'a>(
             debug_node_ids.contains(&path.current_node.id),
         );
         for neighbor in &neighbors {
-            if !visited_segments.insert(path.current_node.id, neighbor.id) {
+            let mut new_visited_segments = path.visited_segments.clone();
+            if !new_visited_segments.insert(path.current_node.id, neighbor.id) {
                 // we have taken this segment before
                 // prevent looping infinitely
                 continue;
             }
 
-            let segment = PathSegment::new_with_sphere_distance(
-                path.current_node,
-                neighbor,
-            );
             let remain_distance_optimistic = sphere_distance_meters(
                 neighbor.lat(), neighbor.lon(),
                 dest_node.lat(), dest_node.lon(),
             );
 
-            let mut new_path = path.clone();
-            new_path.current_node = neighbor;
-            new_path.total_distance += segment.distance;
-            new_path.current_segments.push(segment);
-            new_path.heuristic = new_path.total_distance + remain_distance_optimistic;
-
+            let new_path = path.adding_segment(
+                neighbor,
+                new_visited_segments,
+                path.total_distance + remain_distance_optimistic,
+            );
             paths.push(new_path);
         }
 
@@ -679,10 +719,10 @@ fn shortest_paths<'a>(
 ) -> HashMap<NodeId, LengthPath<'a>> {
     let start_node = id_to_node.get(&start_node_id).expect("start node not found");
     let mut dest_node_to_path: HashMap<NodeId, LengthPath> = HashMap::new();
-    let mut visited_segments = NodePairSet::new_with_directionality(segment_directionality);
 
     let mut paths: Vec<LengthPath<'a>> = vec![LengthPath {
         current_segments: vec![],
+        visited_segments: NodePairSet::new_with_directionality(segment_directionality),
         current_node: start_node,
         total_distance: 0.0,
     }];
@@ -717,23 +757,17 @@ fn shortest_paths<'a>(
 
         for &neighbor in &neighbors {
             // have I taken this path before?
-            if !visited_segments.insert(path.current_node.id, neighbor.id) {
+            let mut new_visited_segments = path.visited_segments.clone();
+            if !new_visited_segments.insert(path.current_node.id, neighbor.id) {
                 // yes
                 //eprintln!("    I've gone this path before");
                 continue;
             }
 
-            let new_seg = PathSegment::new_with_sphere_distance(
-                path.current_node,
+            let new_path = path.adding_segment(
                 neighbor,
+                new_visited_segments,
             );
-
-            // store new path
-            //eprintln!("    I shall remember this");
-            let mut new_path = path.clone();
-            new_path.total_distance += new_seg.distance;
-            new_path.current_segments.push(new_seg);
-            new_path.current_node = neighbor;
             paths.push(new_path);
         }
 
