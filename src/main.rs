@@ -23,7 +23,7 @@ enum OptsMode {
     DumpWays,
     ShortestPaths(ShortestPathsOpts),
     LongestShortestPath,
-    LongestPath,
+    LongestPath(LongestPathOpts),
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
 struct RouteOpts {
@@ -36,6 +36,10 @@ struct RouteOpts {
 struct ShortestPathsOpts {
     pub start_lat: f64,
     pub start_lon: f64,
+}
+#[derive(Clone, Debug, Parser, PartialEq)]
+struct LongestPathOpts {
+    pub start_node_ids: Vec<i64>,
 }
 
 
@@ -790,24 +794,23 @@ fn longest_path_from<'a>(
     segment_directionality: bool,
 ) -> Option<LengthPath<'a>> {
     let mut longest_path: Option<LengthPath<'a>> = None;
-    // unordered node pair; disallow allow passing same track in both directions
-    let mut visited_segments = NodePairSet::new_with_directionality(segment_directionality);
-
     let start_node = id_to_node.get(&start_node_id)
         .expect("start node not found");
 
     let mut paths: Vec<LengthPath<'a>> = vec![LengthPath {
         current_segments: vec![],
+        visited_segments: NodePairSet::new_with_directionality(segment_directionality),
         current_node: start_node,
         total_distance: 0.0,
     }];
 
+    let mut longest_distance = -1.0;
     while let Some(path) = paths.pop() {
-        if let Some(lp) = &longest_path {
-            if lp.total_distance < path.total_distance {
-                longest_path = Some(path.clone());
+        if longest_distance < path.total_distance {
+            if (path.total_distance - longest_distance) > 200.0 {
+                eprintln!("new longest path length: {}", path.total_distance);
             }
-        } else {
+            longest_distance = path.total_distance;
             longest_path = Some(path.clone());
         }
 
@@ -822,24 +825,19 @@ fn longest_path_from<'a>(
             &path.current_node,
             &mut neighbors,
             path.current_segments.last().map(|ls| ls.start_node),
-            one_way_pairs,
+            &one_way_pairs,
             debug_node_ids.contains(&path.current_node.id),
         );
 
         for &neighbor in &neighbors {
-            if !visited_segments.insert(path.current_node.id, neighbor.id) {
+            let mut new_visited_segments = path.visited_segments.clone();
+            if !new_visited_segments.insert(path.current_node.id, neighbor.id) {
                 continue;
             }
-
-            let new_seg = PathSegment::new_with_sphere_distance(
-                path.current_node,
+            let new_path = path.adding_segment(
                 neighbor,
+                new_visited_segments,
             );
-
-            let mut new_path = path.clone();
-            new_path.total_distance += new_seg.distance;
-            new_path.current_segments.push(new_seg);
-            new_path.current_node = neighbor;
             paths.push(new_path);
         }
     }
@@ -1108,14 +1106,24 @@ fn main() {
             eprintlntime!(start_time, "done! longest shortest path distance: {}", longest_shortest_path_detail.total_distance);
             path_to_geojson(longest_shortest_path_detail.current_segments.iter())
         },
-        OptsMode::LongestPath => {
-            let started_counter: AtomicUsize = AtomicUsize::new(0);
-            let longest_path_opt = id_to_node.par_iter()
-                .inspect(|_| {
-                    let counter = started_counter.fetch_add(1, Ordering::SeqCst);
-                    eprintlntime!(start_time, "started item {}/{}", counter, id_to_node.len());
-                })
-                .filter_map(|(&start_node_id, _)| {
+        OptsMode::LongestPath(lpo) => {
+            let start_id_to_node: HashMap<NodeId, &Node> = if lpo.start_node_ids.len() > 0 {
+                lpo.start_node_ids.iter()
+                    .filter_map(|&nid_i64| {
+                        let node_id = NodeId(nid_i64);
+                        if let Some(node) = id_to_node.get(&node_id) {
+                            Some((node_id, *node))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                id_to_node.clone()
+            };
+
+            let longest_path_opt = start_id_to_node.keys()
+                .filter_map(|&start_node_id| {
                     longest_path_from(
                         &id_to_node,
                         &node_to_neighbors,
