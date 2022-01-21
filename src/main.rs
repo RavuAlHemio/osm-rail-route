@@ -1,13 +1,16 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::f64::consts::PI;
 use std::fs::File;
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use clap::Parser;
 use osmpbfreader::{Node, NodeId, OsmPbfReader, Tags, Way};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use toml;
 
 
 #[derive(Clone, Debug, Parser, PartialEq)]
@@ -24,6 +27,7 @@ enum OptsMode {
     ShortestPaths(ShortestPathsOpts),
     LongestShortestPath,
     LongestPath(LongestPathOpts),
+    LongestLoop(LongestLoopOpts),
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
 struct RouteOpts {
@@ -40,6 +44,22 @@ struct ShortestPathsOpts {
 #[derive(Clone, Debug, Parser, PartialEq)]
 struct LongestPathOpts {
     pub start_node_ids: Vec<i64>,
+    #[clap(short = 'l', long)] pub loop_def_file: Option<PathBuf>,
+    #[clap(short = 'p', long)] pub progress_file: Option<PathBuf>,
+    #[clap(short = 'e', long, default_value = "4096")] pub progress_each: usize,
+}
+#[derive(Clone, Debug, Parser, PartialEq)]
+struct LongestLoopOpts {
+    pub def_file: PathBuf,
+    pub loop_file: PathBuf,
+}
+
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+struct LoopDefinition {
+    start: i64,
+    second: i64,
+    end: i64,
 }
 
 
@@ -146,6 +166,12 @@ impl<'a> RoutingPath<'a> {
             heuristic: new_heuristic,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Loop<'a> {
+    pub name: String,
+    pub length_path: LengthPath<'a>,
 }
 
 
@@ -798,28 +824,119 @@ fn longest_path_from<'a>(
     node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
     one_way_pairs: &HashSet<(NodeId, NodeId)>,
     start_node_id: NodeId,
+    second_node_id_opt: Option<NodeId>,
+    end_node_id_opt: Option<NodeId>,
+    start_to_loop: &HashMap<(NodeId, NodeId), Loop<'a>>,
     debug_node_ids: &HashSet<NodeId>,
     segment_directionality: bool,
+    progress_file_opt: Option<&Path>,
+    progress_each: usize,
 ) -> Option<LengthPath<'a>> {
     let mut longest_path: Option<LengthPath<'a>> = None;
     let start_node = id_to_node.get(&start_node_id)
         .expect("start node not found");
+    let second_node_opt = second_node_id_opt.map(|snid| {
+        let sn = id_to_node.get(&snid)
+            .expect("second node not found");
+        let are_neighbors = node_to_neighbors
+            .get(&start_node_id).expect("start node has no neighbors")
+            .contains(&snid);
+        if !are_neighbors {
+            panic!("start and second node are not neighbors!");
+        }
+        sn
+    });
 
-    let mut paths: Vec<LengthPath<'a>> = vec![LengthPath {
+    let mut initial_path = LengthPath {
         current_segments: vec![],
         visited_segments: NodePairSet::new_with_directionality(segment_directionality),
         current_node: start_node,
         total_distance: 0.0,
-    }];
+    };
+    if let Some(second_node) = second_node_opt {
+        let mut new_visited_segments = initial_path.visited_segments.clone();
+        new_visited_segments.insert(start_node.id, second_node.id);
+        initial_path = initial_path.adding_segment(second_node, new_visited_segments);
+    }
+    let mut paths: Vec<LengthPath<'a>> = vec![initial_path];
 
     let mut longest_distance = -1.0;
+    let mut progress_counter = 0;
+    let mut last_progress_length = -1.0;
     while let Some(path) = paths.pop() {
-        if longest_distance < path.total_distance {
-            if (path.total_distance - longest_distance) > 200.0 {
-                eprintln!("new longest path length: {}", path.total_distance);
+        let update_longest = end_node_id_opt
+            .map(|enid| enid == path.current_node.id)
+            .unwrap_or(true);
+        if update_longest {
+            if longest_distance < path.total_distance {
+                if path.total_distance - longest_distance > 200.0 {
+                    eprintln!("new maximum length: {}", path.total_distance);
+                }
+                longest_distance = path.total_distance;
+                longest_path = Some(path.clone());
             }
-            longest_distance = path.total_distance;
-            longest_path = Some(path.clone());
+
+            if end_node_id_opt.is_some() {
+                // do not evaluate neighbors
+                continue;
+            }
+        }
+
+        if let Some(prog_file) = progress_file_opt {
+            progress_counter += 1;
+            if progress_counter >= progress_each {
+                if let Some(lp) = &longest_path {
+                    if last_progress_length < longest_distance {
+                        eprintln!("outputting progress at {}", longest_distance);
+                        let geojson = path_to_geojson(lp.current_segments.iter());
+                        let f = File::create(prog_file)
+                            .expect("failed to open progress file");
+                        serde_json::to_writer_pretty(f, &geojson)
+                            .expect("failed to write progress file");
+
+                        last_progress_length = longest_distance;
+                    }
+
+                    progress_counter = 0;
+                }
+            }
+        }
+
+        // is this a loop?
+        let mut loop_path_opt = None;
+        let prev_node_opt = path.current_segments.last().map(|ls| ls.start_node);
+        if let Some(prev_node) = prev_node_opt {
+            if let Some(lp) = start_to_loop.get(&(prev_node.id, path.current_node.id)) {
+                // yes; fast-path
+                let mut new_segments = path.current_segments.clone();
+                new_segments.extend_from_slice(&lp.length_path.current_segments);
+                let mut new_visited_segments = path.visited_segments.clone();
+                let mut nvs_ok = true;
+                for seg in lp.length_path.current_segments.iter().skip(1) {
+                    if !new_visited_segments.insert(seg.start_node.id, seg.end_node.id) {
+                        // we can't use this loop because we have visited some of its segments before
+                        eprintln!(
+                            "cannot take loop {}; segment {:?}-{:?} already visited",
+                            lp.name, seg.start_node.id, seg.end_node.id,
+                        );
+                        nvs_ok = false;
+                        break;
+                    }
+                }
+                if nvs_ok {
+                    loop_path_opt = Some(LengthPath {
+                        current_node: lp.length_path.current_node,
+                        current_segments: new_segments,
+                        total_distance: path.total_distance + lp.length_path.total_distance,
+                        visited_segments: new_visited_segments,
+                    });
+                }
+            }
+        }
+        if let Some(lp) = loop_path_opt {
+            // append the whole loop
+            paths.push(lp);
+            continue;
         }
 
         // check neighborhood
@@ -832,7 +949,7 @@ fn longest_path_from<'a>(
         whittle_down_neighbors(
             &path.current_node,
             &mut neighbors,
-            path.current_segments.last().map(|ls| ls.start_node),
+            prev_node_opt,
             &one_way_pairs,
             debug_node_ids.contains(&path.current_node.id),
         );
@@ -1130,15 +1247,68 @@ fn main() {
                 id_to_node.clone()
             };
 
+            let start_to_loop: HashMap<(NodeId, NodeId), Loop> = if let Some(ldf) = &lpo.loop_def_file {
+                eprintlntime!(start_time, "calculating loops");
+
+                let loop_defs: HashMap<String, LoopDefinition> = {
+                    let mut f = File::open(ldf)
+                        .expect("failed to open loop definition file");
+                    let mut buf = Vec::new();
+                    f.read_to_end(&mut buf)
+                        .expect("failed to read loop definition file");
+                    toml::from_slice(&buf)
+                        .expect("failed to parse loop definition file")
+                };
+                let empty_loops = HashMap::new();
+
+                let mut loops = HashMap::new();
+                for (loop_name, loop_def) in &loop_defs {
+                    let longest_loop_opt = longest_path_from(
+                        &id_to_node,
+                        &node_to_neighbors,
+                        &one_way_pairs,
+                        NodeId(loop_def.start),
+                        Some(NodeId(loop_def.second)),
+                        Some(NodeId(loop_def.end)),
+                        &empty_loops,
+                        &debug_node_ids,
+                        opts.directional_segments,
+                        None,
+                        0,
+                    );
+                    let longest_loop = match longest_loop_opt {
+                        Some(ll) => ll,
+                        None => panic!("no loop found for {}", loop_name),
+                    };
+
+                    loops.insert(
+                        (longest_loop.current_segments[0].start_node.id, longest_loop.current_segments[0].end_node.id),
+                        Loop {
+                            name: loop_name.clone(),
+                            length_path: longest_loop,
+                        },
+                    );
+                }
+                loops
+            } else {
+                HashMap::new()
+            };
+
             let longest_path_opt = start_id_to_node.keys()
                 .filter_map(|&start_node_id| {
+                    eprintlntime!(start_time, "calculating longest path from {:?}", start_node_id);
                     longest_path_from(
                         &id_to_node,
                         &node_to_neighbors,
                         &one_way_pairs,
                         start_node_id,
+                        None,
+                        None,
+                        &start_to_loop,
                         &debug_node_ids,
                         opts.directional_segments,
+                        lpo.progress_file.as_ref().map(|pf| pf.as_path()),
+                        lpo.progress_each,
                     )
                 })
                 .max_by(|left, right| left.total_distance.partial_cmp(&right.total_distance).unwrap());
@@ -1146,6 +1316,69 @@ fn main() {
             let longest_path = longest_path_opt
                 .expect("no path found");
             path_to_geojson(longest_path.current_segments.iter())
+        },
+        OptsMode::LongestLoop(llo) => {
+            let loop_defs: HashMap<String, LoopDefinition> = match File::open(&llo.def_file) {
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        HashMap::new()
+                    } else {
+                        panic!("failed to open loop file: {}", e);
+                    }
+                },
+                Ok(mut lf) => {
+                    let mut bytes = Vec::new();
+                    lf.read_to_end(&mut bytes)
+                        .expect("failed to read file");
+                    toml::from_slice(&bytes)
+                        .expect("failed to parse loop definition file")
+                },
+            };
+            let empty_loops = HashMap::new();
+
+            let mut loops: HashMap<String, Vec<i64>> = HashMap::new();
+            for (loop_name, loop_def) in &loop_defs {
+                let longest_loop_opt = longest_path_from(
+                    &id_to_node,
+                    &node_to_neighbors,
+                    &one_way_pairs,
+                    NodeId(loop_def.start),
+                    Some(NodeId(loop_def.second)),
+                    Some(NodeId(loop_def.end)),
+                    &empty_loops,
+                    &debug_node_ids,
+                    opts.directional_segments,
+                    None,
+                    0,
+                );
+
+                let longest_loop = match longest_loop_opt {
+                    Some(ll) => ll,
+                    None => {
+                        eprintln!("no loop found for {}", loop_name);
+                        continue;
+                    },
+                };
+
+                // get node numbers
+                let loop_node_ids: Vec<i64> = longest_loop
+                    .to_nodes()
+                    .iter()
+                    .map(|n| n.id.0)
+                    .collect();
+
+                loops.insert(loop_name.clone(), loop_node_ids);
+            }
+
+            {
+                // output the file
+                let loop_file = File::create(&llo.loop_file)
+                    .expect("failed to create loop file");
+                serde_json::to_writer_pretty(loop_file, &loops)
+                    .expect("failed to write loop file");
+            }
+
+            serde_json::Value::Null
         },
         _ => unreachable!(),
     };

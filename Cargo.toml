@@ -7,4 +7,6 @@ edition = "2021"
 clap = { version = "3.0", features = ["derive"] }
 osmpbfreader = { git = "https://github.com/TeXitoi/osmpbfreader-rs.git" }
 rayon = { version = "1.5" }
+serde = { version = "1.0" }
 serde_json = { version = "1.0" }
+toml = { version = "0.5" }
