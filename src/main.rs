@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::f64::consts::PI;
 use std::fs::File;
 use std::path::PathBuf;
@@ -456,7 +456,7 @@ fn remove_invalid_ways(id_to_node: &HashMap<NodeId, &Node>, ways: &mut Vec<&Way>
     ways.retain(|w| !w.nodes.iter().any(|w| !id_to_node.contains_key(w)));
 }
 
-fn calculate_neighbors(ways: &[&Way]) -> (HashMap<NodeId, HashSet<NodeId>>, HashSet<(NodeId, NodeId)>) {
+fn calculate_neighbors(ways: &[&Way]) -> (HashMap<NodeId, BTreeSet<NodeId>>, HashSet<(NodeId, NodeId)>) {
     let mut node_to_neighbors = HashMap::new();
     let mut one_way_pairs = HashSet::new();
     for way in ways {
@@ -480,11 +480,11 @@ fn calculate_neighbors(ways: &[&Way]) -> (HashMap<NodeId, HashSet<NodeId>>, Hash
             let other_id = way.nodes[i+1];
 
             let one_neighbors = node_to_neighbors.entry(one_id)
-                .or_insert_with(|| HashSet::new());
+                .or_insert_with(|| BTreeSet::new());
             one_neighbors.insert(other_id);
 
             let other_neighbors = node_to_neighbors.entry(other_id)
-                .or_insert_with(|| HashSet::new());
+                .or_insert_with(|| BTreeSet::new());
             other_neighbors.insert(one_id);
 
             if one_way == OneWay::Along {
@@ -636,7 +636,7 @@ fn whittle_down_neighbors(
 
 fn kinda_astar_search<'a>(
     id_to_node: &'a HashMap<NodeId, &Node>,
-    node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
+    node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
     one_way_pairs: &HashSet<(NodeId, NodeId)>,
     start_node_id: NodeId,
     dest_node_id: NodeId,
@@ -714,7 +714,7 @@ fn kinda_astar_search<'a>(
 
 fn shortest_paths<'a>(
     id_to_node: &'a HashMap<NodeId, &Node>,
-    node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
+    node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
     one_way_pairs: &HashSet<(NodeId, NodeId)>,
     start_node_id: NodeId,
     dest_nodes: &HashSet<NodeId>,
@@ -787,7 +787,7 @@ fn shortest_paths<'a>(
 
 fn longest_path_from<'a>(
     id_to_node: &'a HashMap<NodeId, &Node>,
-    node_to_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
+    node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
     one_way_pairs: &HashSet<(NodeId, NodeId)>,
     start_node_id: NodeId,
     debug_node_ids: &HashSet<NodeId>,
