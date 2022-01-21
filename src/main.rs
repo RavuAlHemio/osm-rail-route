@@ -471,6 +471,14 @@ fn calculate_neighbors(ways: &[&Way]) -> (HashMap<NodeId, BTreeSet<NodeId>>, Has
             } else {
                 OneWay::No
             }
+        } else if let Some(rpd) = way.tags.get("railway:preferred_direction") {
+            if rpd == "forward" {
+                OneWay::Along
+            } else if rpd == "backward" {
+                OneWay::Opposite
+            } else {
+                OneWay::No
+            }
         } else {
             OneWay::No
         };
