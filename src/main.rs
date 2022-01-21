@@ -61,8 +61,9 @@ impl<'a> PathSegment<'a> {
         }
     }
 
+    #[allow(unused)]
     pub fn bearing(&self) -> f64 {
-        bearing(&self.start_node, self.end_node)
+        bearing(self.start_node, self.end_node)
     }
 }
 
@@ -75,6 +76,7 @@ struct RoutingPath<'a> {
     pub heuristic: f64,
 }
 impl<'a> RoutingPath<'a> {
+    #[allow(unused)]
     pub fn count_node_occurrences(&self, node_id: NodeId) -> usize {
         let mut count = 0;
         let mut first_node = true;
@@ -93,6 +95,7 @@ impl<'a> RoutingPath<'a> {
         count
     }
 
+    #[allow(unused)]
     pub fn to_nodes(&self) -> Vec<&Node> {
         let mut ret = Vec::new();
         let all_segments = &self.current_segments;
@@ -157,7 +160,10 @@ impl OrderedNodePair {
         }
     }
 
+    #[allow(unused)]
     pub fn first_node(&self) -> NodeId { self.first_node }
+
+    #[allow(unused)]
     pub fn second_node(&self) -> NodeId { self.second_node }
 }
 impl From<(NodeId, NodeId)> for OrderedNodePair {
@@ -187,7 +193,10 @@ impl UnorderedNodePair {
         }
     }
 
+    #[allow(unused)]
     pub fn smaller_node(&self) -> NodeId { self.pair.first_node() }
+
+    #[allow(unused)]
     pub fn greater_node(&self) -> NodeId { self.pair.second_node() }
 }
 impl From<(NodeId, NodeId)> for UnorderedNodePair {
@@ -224,6 +233,8 @@ impl NodePairSet {
             Self::Unordered(us) => us.insert(UnorderedNodePair::new(node1, node2)),
         }
     }
+
+    #[allow(unused)]
     pub fn contains(&self, node1: NodeId, node2: NodeId) -> bool {
         match self {
             Self::Ordered(os) => os.contains(&OrderedNodePair::new(node1, node2)),
@@ -267,6 +278,7 @@ fn make_fake_node(lat: f64, lon: f64) -> Node {
 
 
 #[allow(non_snake_case)]
+#[allow(unused)]
 fn geo_distance_meters(lat1_deg: f64, lon1_deg: f64, lat2_deg: f64, lon2_deg: f64) -> f64 {
     let lat1_rad = lat1_deg * PI / 180.0;
     let lat2_rad = lat2_deg * PI / 180.0;
