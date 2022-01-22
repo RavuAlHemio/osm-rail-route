@@ -27,7 +27,6 @@ enum OptsMode {
     ShortestPaths(ShortestPathsOpts),
     LongestShortestPath,
     LongestPath(LongestPathOpts),
-    LongestLoop(LongestLoopOpts),
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
 struct RouteOpts {
@@ -48,18 +47,17 @@ struct LongestPathOpts {
     #[clap(short = 'p', long)] pub progress_file: Option<PathBuf>,
     #[clap(short = 'e', long, default_value = "4096")] pub progress_each: usize,
 }
-#[derive(Clone, Debug, Parser, PartialEq)]
-struct LongestLoopOpts {
-    pub def_file: PathBuf,
-    pub loop_file: PathBuf,
+
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct LoopDefinitions {
+    pub levels_loops: Vec<HashMap<String, LoopDefinition>>,
 }
-
-
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 struct LoopDefinition {
-    start: i64,
-    second: i64,
-    end: i64,
+    pub start: i64,
+    pub second: i64,
+    pub end: i64,
 }
 
 
@@ -1040,6 +1038,62 @@ fn path_to_geojson<'a, I: Iterator<Item = &'a PathSegment<'a>>>(segments: I) -> 
     })
 }
 
+fn load_loops<'a>(
+    loop_def_path: &Path,
+    id_to_node: &'a HashMap<NodeId, &'a Node>,
+    node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
+    one_way_pairs: &HashSet<(NodeId, NodeId)>,
+    debug_node_ids: &HashSet<NodeId>,
+    segment_directionality: bool,
+) -> HashMap<(NodeId, NodeId), Loop<'a>> {
+    let loop_defs: LoopDefinitions = {
+        let mut f = File::open(loop_def_path)
+            .expect("failed to open loop definition file");
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)
+            .expect("failed to read loop definition file");
+        toml::from_slice(&buf)
+            .expect("failed to parse loop definition file")
+    };
+
+    let mut newest_level_loops = HashMap::new();
+    for level_loops in &loop_defs.levels_loops {
+        let mut this_level_loops = HashMap::new();
+        for (loop_name, loop_def) in level_loops.iter() {
+            eprintln!("calculating loop {}", loop_name);
+            let longest_loop_opt = longest_path_from(
+                &id_to_node,
+                &node_to_neighbors,
+                &one_way_pairs,
+                NodeId(loop_def.start),
+                Some(NodeId(loop_def.second)),
+                Some(NodeId(loop_def.end)),
+                &newest_level_loops,
+                &debug_node_ids,
+                segment_directionality,
+                None,
+                0,
+            );
+            let longest_loop = match longest_loop_opt {
+                Some(ll) => ll,
+                None => panic!("no loop found for {}", loop_name),
+            };
+
+            this_level_loops.insert(
+                (longest_loop.current_segments[0].start_node.id, longest_loop.current_segments[0].end_node.id),
+                Loop {
+                    name: loop_name.clone(),
+                    length_path: longest_loop,
+                },
+            );
+        }
+        for (k, v) in this_level_loops.drain() {
+            newest_level_loops.insert(k, v);
+        }
+    }
+    newest_level_loops
+}
+
 
 fn main() {
     let opts = Opts::parse();
@@ -1247,52 +1301,19 @@ fn main() {
                 id_to_node.clone()
             };
 
-            let start_to_loop: HashMap<(NodeId, NodeId), Loop> = if let Some(ldf) = &lpo.loop_def_file {
-                eprintlntime!(start_time, "calculating loops");
-
-                let loop_defs: HashMap<String, LoopDefinition> = {
-                    let mut f = File::open(ldf)
-                        .expect("failed to open loop definition file");
-                    let mut buf = Vec::new();
-                    f.read_to_end(&mut buf)
-                        .expect("failed to read loop definition file");
-                    toml::from_slice(&buf)
-                        .expect("failed to parse loop definition file")
-                };
-                let empty_loops = HashMap::new();
-
-                let mut loops = HashMap::new();
-                for (loop_name, loop_def) in &loop_defs {
-                    let longest_loop_opt = longest_path_from(
+            let start_to_loop: HashMap<(NodeId, NodeId), Loop> = lpo.loop_def_file
+                .as_ref()
+                .map(|ldf|
+                    load_loops(
+                        ldf.as_path(),
                         &id_to_node,
                         &node_to_neighbors,
                         &one_way_pairs,
-                        NodeId(loop_def.start),
-                        Some(NodeId(loop_def.second)),
-                        Some(NodeId(loop_def.end)),
-                        &empty_loops,
                         &debug_node_ids,
                         opts.directional_segments,
-                        None,
-                        0,
-                    );
-                    let longest_loop = match longest_loop_opt {
-                        Some(ll) => ll,
-                        None => panic!("no loop found for {}", loop_name),
-                    };
-
-                    loops.insert(
-                        (longest_loop.current_segments[0].start_node.id, longest_loop.current_segments[0].end_node.id),
-                        Loop {
-                            name: loop_name.clone(),
-                            length_path: longest_loop,
-                        },
-                    );
-                }
-                loops
-            } else {
-                HashMap::new()
-            };
+                    )
+                )
+                .unwrap_or_else(|| HashMap::new());
 
             let longest_path_opt = start_id_to_node.keys()
                 .filter_map(|&start_node_id| {
@@ -1316,69 +1337,6 @@ fn main() {
             let longest_path = longest_path_opt
                 .expect("no path found");
             path_to_geojson(longest_path.current_segments.iter())
-        },
-        OptsMode::LongestLoop(llo) => {
-            let loop_defs: HashMap<String, LoopDefinition> = match File::open(&llo.def_file) {
-                Err(e) => {
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        HashMap::new()
-                    } else {
-                        panic!("failed to open loop file: {}", e);
-                    }
-                },
-                Ok(mut lf) => {
-                    let mut bytes = Vec::new();
-                    lf.read_to_end(&mut bytes)
-                        .expect("failed to read file");
-                    toml::from_slice(&bytes)
-                        .expect("failed to parse loop definition file")
-                },
-            };
-            let empty_loops = HashMap::new();
-
-            let mut loops: HashMap<String, Vec<i64>> = HashMap::new();
-            for (loop_name, loop_def) in &loop_defs {
-                let longest_loop_opt = longest_path_from(
-                    &id_to_node,
-                    &node_to_neighbors,
-                    &one_way_pairs,
-                    NodeId(loop_def.start),
-                    Some(NodeId(loop_def.second)),
-                    Some(NodeId(loop_def.end)),
-                    &empty_loops,
-                    &debug_node_ids,
-                    opts.directional_segments,
-                    None,
-                    0,
-                );
-
-                let longest_loop = match longest_loop_opt {
-                    Some(ll) => ll,
-                    None => {
-                        eprintln!("no loop found for {}", loop_name);
-                        continue;
-                    },
-                };
-
-                // get node numbers
-                let loop_node_ids: Vec<i64> = longest_loop
-                    .to_nodes()
-                    .iter()
-                    .map(|n| n.id.0)
-                    .collect();
-
-                loops.insert(loop_name.clone(), loop_node_ids);
-            }
-
-            {
-                // output the file
-                let loop_file = File::create(&llo.loop_file)
-                    .expect("failed to create loop file");
-                serde_json::to_writer_pretty(loop_file, &loops)
-                    .expect("failed to write loop file");
-            }
-
-            serde_json::Value::Null
         },
         _ => unreachable!(),
     };
