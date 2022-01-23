@@ -43,3 +43,28 @@ neighbor = 2432443174
 # Eichenstraße USTRAB exit: continue on Gürtel
 base = 4698908747
 neighbor = 2206792170
+
+[[preferred_neighbors]]
+# Südbahnhof loop: continue toward Absberggasse
+base = 4698929213
+neighbor = 4071153244
+
+[[preferred_neighbors]]
+# Josefstädter Straße loop: continue into city
+base = 4698819297
+neighbor = 2423362076
+
+[[preferred_neighbors]]
+# Westbahnhof loop: try continuing north on the Gürtel, towards the Burggasse loop
+base = 4698900514
+neighbor = 2360766431
+
+[[preferred_neighbors]]
+# Burggasse loop: go there from Gürtel, not to the Urban-Loritz-Platz loop
+base = 4698831135
+neighbor = 2510778330
+
+[[preferred_neighbors]]
+# Ring: turn towards Börsegasse
+base = 4698994108
+neighbor = 2471325577
