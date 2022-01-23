@@ -1,0 +1,123 @@
+[[levels_loops]]
+# start with the trivial loops (single loop)
+
+[levels_loops."Baden nach Meidling"]
+start = 1037067226
+second = 1731709171
+end = 1378094316
+
+[levels_loops."Meidling nach Baden"]
+start = 248791816
+second = 2432443174
+end = 1306668579
+
+[levels_loops."Speising"]
+start = 4698150842
+second = 1458791824
+end = 4698150845
+
+[levels_loops."St. Veit"]
+start = 4698150852
+second = 2456770803
+end = 4698150853
+
+[levels_loops."Huetteldorf"]
+start = 4698142667
+second = 4698142663
+end = 2439260565
+
+[levels_loops."Neuwaldegg"]
+start = 910390076
+second = 4720116405
+end = 1521652695
+
+[levels_loops."Gersthof"]
+start = 6533922081
+second = 2360784554
+end = 4698095302
+
+[levels_loops."Poetzleinsdorf"]
+start = 4698095301
+second = 6533922080
+end = 6533922081
+
+[levels_loops."Grinzing"]
+start = 2297084676
+second = 2397733665
+end = 4698080252
+
+[levels_loops."Hohe Warte"]
+start = 2297084676
+second = 6534048583
+end = 4698080252
+
+[levels_loops."Nussdorf"]
+start = 2604936149
+second = 2458676229
+end = 2379749693
+
+[levels_loops."Strebersdorf"]
+start = 4698058256
+second = 1598055206
+end = 4698058255
+
+[levels_loops."Stammersdorf"]
+start = 4698058245
+second = 4248079599
+end = 4698058251
+
+[levels_loops."Hausfeldstrasse"]
+start = 4698014918
+second = 4146737190
+end = 1596681049
+
+[levels_loops."Aspern Oberdorfstrasse"]
+start = 4698014923
+second = 4720364193
+end = 1020652627
+
+[levels_loops."Prater Hauptallee"]
+start = 4698929191
+second = 2423068677
+end = 2423071644
+
+[levels_loops."Kaiserebersdorf"]
+start = 4698165202
+second = 4690583215
+end = 4698165203
+
+[levels_loops."Otto-Probst-Platz"]
+start = 4698210366
+second = 2252382231
+end = 4698210369
+
+[levels_loops."Stefan-Fadinger-Platz"]
+start = 4698210385
+second = 2365898298
+end = 4698210388
+
+[[levels_loops]]
+# next, forks of two loops
+
+[levels_loops."Grinzing & Hohe Warte"]
+start = 4698802245
+second = 2296929466
+end = 2296929347
+
+[levels_loops."Strebersdorf & Stammersdorf"]
+start = 8906258681
+second = 4698058232
+end = 4698058242
+
+[levels_loops."Hausfeldstrasse & Oberdorfstrasse"]
+start = 4698058233
+second = 4868324736
+end = 4698058241
+
+[[levels_loops]]
+# at this point, we might be able to calculate large swathes
+
+[levels_loops."Transdanubien"]
+start = 1919626518
+second = 1598823132
+end = 4698077606

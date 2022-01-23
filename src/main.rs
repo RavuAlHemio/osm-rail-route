@@ -1,3 +1,6 @@
+mod collections;
+
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::f64::consts::PI;
 use std::fs::File;
@@ -11,6 +14,8 @@ use osmpbfreader::{Node, NodeId, OsmPbfReader, Tags, Way};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use toml;
+
+use crate::collections::NodePairSet;
 
 
 #[derive(Clone, Debug, Parser, PartialEq)]
@@ -213,105 +218,36 @@ impl<'a> LengthPath<'a> {
             total_distance: new_total_distance,
         }
     }
-}
 
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct OrderedNodePair {
-    first_node: NodeId,
-    second_node: NodeId,
-}
-impl OrderedNodePair {
-    pub fn new(
-        first_node: NodeId,
-        second_node: NodeId,
-    ) -> Self {
-        Self {
-            first_node,
-            second_node,
+    pub fn extending_by_path(
+        &self,
+        path_to_append: &Self,
+    ) -> Option<Self> {
+        if let Some(first_segment_to_append) = path_to_append.current_segments.first() {
+            if first_segment_to_append.start_node.id != self.current_node.id {
+                // not valid to append this segment
+                return None;
+            }
         }
-    }
 
-    #[allow(unused)]
-    pub fn first_node(&self) -> NodeId { self.first_node }
-
-    #[allow(unused)]
-    pub fn second_node(&self) -> NodeId { self.second_node }
-}
-impl From<(NodeId, NodeId)> for OrderedNodePair {
-    fn from(pair: (NodeId, NodeId)) -> Self {
-        Self::new(pair.0, pair.1)
-    }
-}
-
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct UnorderedNodePair {
-    pair: OrderedNodePair,
-}
-impl UnorderedNodePair {
-    pub fn new(
-        one_node: NodeId,
-        other_node: NodeId,
-    ) -> Self {
-        let pair = if one_node <= other_node {
-            OrderedNodePair::new(one_node, other_node)
-        } else {
-            OrderedNodePair::new(other_node, one_node)
-        };
-
-        Self {
-            pair,
+        // calculate new visited segments
+        let mut new_visited_segments = self.visited_segments.clone();
+        for (n1, n2) in path_to_append.visited_segments.iter() {
+            if !new_visited_segments.insert(n1, n2) {
+                // cannot extend by this path; segments have already been visited
+                return None;
+            }
         }
-    }
 
-    #[allow(unused)]
-    pub fn smaller_node(&self) -> NodeId { self.pair.first_node() }
+        let mut new_current_segments = self.current_segments.clone();
+        new_current_segments.extend_from_slice(&path_to_append.current_segments);
 
-    #[allow(unused)]
-    pub fn greater_node(&self) -> NodeId { self.pair.second_node() }
-}
-impl From<(NodeId, NodeId)> for UnorderedNodePair {
-    fn from(pair: (NodeId, NodeId)) -> Self {
-        Self::new(pair.0, pair.1)
-    }
-}
-
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum NodePairSet {
-    Ordered(HashSet<OrderedNodePair>),
-    Unordered(HashSet<UnorderedNodePair>),
-}
-impl NodePairSet {
-    pub fn new_ordered() -> Self {
-        Self::Ordered(HashSet::new())
-    }
-    pub fn new_unordered() -> Self {
-        Self::Unordered(HashSet::new())
-    }
-    pub fn new_with_directionality(directional: bool) -> Self {
-        if directional {
-            Self::new_ordered()
-        } else {
-            Self::new_unordered()
-        }
-    }
-    pub fn insert(&mut self, node1: NodeId, node2: NodeId) -> bool {
-        // true if it's a new entry
-        // false if it's already contained
-        match self {
-            Self::Ordered(os) => os.insert(OrderedNodePair::new(node1, node2)),
-            Self::Unordered(us) => us.insert(UnorderedNodePair::new(node1, node2)),
-        }
-    }
-
-    #[allow(unused)]
-    pub fn contains(&self, node1: NodeId, node2: NodeId) -> bool {
-        match self {
-            Self::Ordered(os) => os.contains(&OrderedNodePair::new(node1, node2)),
-            Self::Unordered(us) => us.contains(&UnorderedNodePair::new(node1, node2)),
-        }
+        Some(Self {
+            current_node: path_to_append.current_node,
+            current_segments: new_current_segments,
+            total_distance: self.total_distance + path_to_append.total_distance,
+            visited_segments: new_visited_segments,
+        })
     }
 }
 
@@ -658,11 +594,122 @@ fn whittle_down_neighbors(
         let bearing_diff_deg = bearing_diff_rad(prev_bearing, neigh_bearing).abs() * 180.0 / PI;
         bearing_diff_deg < MAX_UNMARKED_BEARING_DIFF_DEG
     });
+
     if debug {
         let neigh_ids: Vec<i64> = neighbors.iter().map(|n| n.id.0).collect();
         eprintln!("    after: {:?}", neigh_ids);
     }
+
     remove_one_way_neighbors(base_node, neighbors, one_way_pairs, debug);
+}
+
+
+fn calculate_chains<'a>(
+    id_to_node: &'a HashMap<NodeId, &Node>,
+    node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
+    one_way_pairs: &HashSet<(NodeId, NodeId)>,
+    directional_segments: bool,
+) -> HashMap<(NodeId, NodeId), LengthPath<'a>> {
+    let mut start_to_chain: HashMap<(NodeId, NodeId), LengthPath<'a>> = HashMap::new();
+    for start_node in id_to_node.values() {
+        let neighbor_ids = match node_to_neighbors.get(&start_node.id) {
+            None => continue,
+            Some(n) => n,
+        };
+        if neighbor_ids.len() == 0 {
+            // isolated node; not interesting
+            continue;
+        }
+        if neighbor_ids.len() == 2 {
+            // pass-through node; not interesting
+            continue;
+        }
+
+        let mut neighbors: Vec<&Node> = neighbor_ids.iter()
+            .map(|nid| *id_to_node.get(nid).unwrap())
+            .collect();
+
+        whittle_down_neighbors(
+            start_node,
+            &mut neighbors,
+            None,
+            one_way_pairs,
+            false,
+        );
+
+        for neighbor in &neighbors {
+            // prepare the initial path
+            let init_segment = PathSegment::new_with_sphere_distance(
+                start_node,
+                neighbor,
+            );
+            let mut visited_segments = NodePairSet::new_with_directionality(directional_segments);
+            visited_segments.insert(start_node.id, neighbor.id);
+            let total_distance = init_segment.distance;
+
+            let mut current_path = LengthPath {
+                current_node: neighbor,
+                current_segments: vec![init_segment],
+                total_distance,
+                visited_segments,
+            };
+
+            loop {
+                let prev_node = current_path.current_segments
+                    .last().unwrap()
+                    .start_node;
+                assert_eq!(current_path.current_segments.last().unwrap().end_node.id, current_path.current_node.id);
+
+                // find all of the current node's neighbors
+                let cur_neigh_ids = match node_to_neighbors.get(&current_path.current_node.id) {
+                    Some(n) => n,
+                    None => break,
+                };
+                if cur_neigh_ids.len() == 0 || cur_neigh_ids.len() == 1 {
+                    // isolated node?! or dead-end node
+                    break;
+                }
+                if cur_neigh_ids.len() > 2 {
+                    // intersection; stop
+                    break;
+                }
+
+                let mut neighbors: Vec<&Node> = cur_neigh_ids.iter()
+                    .map(|nid| *id_to_node.get(nid).unwrap())
+                    .collect();
+                whittle_down_neighbors(
+                    current_path.current_node,
+                    &mut neighbors,
+                    Some(prev_node),
+                    one_way_pairs,
+                    false,
+                );
+
+                if neighbors.len() == 0 {
+                    // neighbors have been reduced to zero
+                    break;
+                }
+
+                assert_eq!(neighbors.len(), 1);
+                let chosen_neighbor = neighbors[0];
+
+                let mut new_visited_segments = current_path.visited_segments.clone();
+                new_visited_segments.insert(current_path.current_node.id, chosen_neighbor.id);
+                let new_path = current_path.adding_segment(chosen_neighbor, new_visited_segments);
+                current_path = new_path;
+            }
+
+            start_to_chain.insert(
+                (
+                    current_path.current_segments[0].start_node.id,
+                    current_path.current_segments[0].end_node.id,
+                ),
+                current_path,
+            );
+        }
+    }
+
+    start_to_chain
 }
 
 
@@ -824,6 +871,7 @@ fn longest_path_from<'a>(
     start_node_id: NodeId,
     second_node_id_opt: Option<NodeId>,
     end_node_id_opt: Option<NodeId>,
+    start_to_chain: &HashMap<(NodeId, NodeId), LengthPath<'a>>,
     start_to_loop: &HashMap<(NodeId, NodeId), Loop<'a>>,
     debug_node_ids: &HashSet<NodeId>,
     segment_directionality: bool,
@@ -845,17 +893,12 @@ fn longest_path_from<'a>(
         sn
     });
 
-    let mut initial_path = LengthPath {
+    let initial_path = LengthPath {
         current_segments: vec![],
         visited_segments: NodePairSet::new_with_directionality(segment_directionality),
         current_node: start_node,
         total_distance: 0.0,
     };
-    if let Some(second_node) = second_node_opt {
-        let mut new_visited_segments = initial_path.visited_segments.clone();
-        new_visited_segments.insert(start_node.id, second_node.id);
-        initial_path = initial_path.adding_segment(second_node, new_visited_segments);
-    }
     let mut paths: Vec<LengthPath<'a>> = vec![initial_path];
 
     let mut longest_distance = -1.0;
@@ -900,49 +943,14 @@ fn longest_path_from<'a>(
             }
         }
 
-        // is this a loop?
-        let mut loop_path_opt = None;
-        let prev_node_opt = path.current_segments.last().map(|ls| ls.start_node);
-        if let Some(prev_node) = prev_node_opt {
-            if let Some(lp) = start_to_loop.get(&(prev_node.id, path.current_node.id)) {
-                // yes; fast-path
-                let mut new_segments = path.current_segments.clone();
-                new_segments.extend_from_slice(&lp.length_path.current_segments);
-                let mut new_visited_segments = path.visited_segments.clone();
-                let mut nvs_ok = true;
-                for seg in lp.length_path.current_segments.iter().skip(1) {
-                    if !new_visited_segments.insert(seg.start_node.id, seg.end_node.id) {
-                        // we can't use this loop because we have visited some of its segments before
-                        eprintln!(
-                            "cannot take loop {}; segment {:?}-{:?} already visited",
-                            lp.name, seg.start_node.id, seg.end_node.id,
-                        );
-                        nvs_ok = false;
-                        break;
-                    }
-                }
-                if nvs_ok {
-                    loop_path_opt = Some(LengthPath {
-                        current_node: lp.length_path.current_node,
-                        current_segments: new_segments,
-                        total_distance: path.total_distance + lp.length_path.total_distance,
-                        visited_segments: new_visited_segments,
-                    });
-                }
-            }
-        }
-        if let Some(lp) = loop_path_opt {
-            // append the whole loop
-            paths.push(lp);
-            continue;
-        }
-
         // check neighborhood
         let mut neighbors: Vec<&Node> = node_to_neighbors
             .get(&path.current_node.id).unwrap()
             .iter()
             .map(|nid| *id_to_node.get(nid).unwrap())
             .collect();
+        let prev_node_opt = path.current_segments.last()
+            .map(|ls| ls.start_node);
 
         whittle_down_neighbors(
             &path.current_node,
@@ -953,6 +961,50 @@ fn longest_path_from<'a>(
         );
 
         for &neighbor in &neighbors {
+            if path.current_segments.len() == 0 {
+                // beginning of path
+                if let Some(second_node) = second_node_opt {
+                    // second node is chosen
+                    if second_node.id != neighbor.id {
+                        continue;
+                    }
+                }
+            }
+
+            // check for loop
+            if let Some(lp) = start_to_loop.get(&(path.current_node.id, neighbor.id)) {
+                // yes; append it if possible
+                if let Some(path_with_loop) = path.extending_by_path(&lp.length_path) {
+                    if debug_node_ids.contains(&path.current_node.id) {
+                        eprintln!("appending loop {:?}", lp.name);
+                    }
+                    paths.push(path_with_loop);
+                    continue;
+                }
+            }
+
+            // check for chain
+            if let Some(chain) = start_to_chain.get(&(path.current_node.id, neighbor.id)) {
+                // yes; append it if possible
+                if let Some(path_with_chain) = path.extending_by_path(chain) {
+                    if debug_node_ids.contains(&path.current_node.id) {
+                        eprintln!(
+                            "appending chain from {:?} to {:?}",
+                            chain.current_segments.first().unwrap().start_node.id,
+                            chain.current_segments.last().unwrap().end_node.id,
+                        );
+                    }
+                    paths.push(path_with_chain);
+                    continue;
+                }
+            }
+
+            if debug_node_ids.contains(&path.current_node.id) {
+                eprintln!(
+                    "non-chain neighbor! {:?} -> {:?}",
+                    path.current_node.id, neighbor.id,
+                );
+            }
             let mut new_visited_segments = path.visited_segments.clone();
             if !new_visited_segments.insert(path.current_node.id, neighbor.id) {
                 continue;
@@ -1042,6 +1094,7 @@ fn load_loops<'a>(
     loop_def_path: &Path,
     id_to_node: &'a HashMap<NodeId, &'a Node>,
     node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
+    start_to_chain: &HashMap<(NodeId, NodeId), LengthPath<'a>>,
     one_way_pairs: &HashSet<(NodeId, NodeId)>,
     debug_node_ids: &HashSet<NodeId>,
     segment_directionality: bool,
@@ -1068,6 +1121,7 @@ fn load_loops<'a>(
                 NodeId(loop_def.start),
                 Some(NodeId(loop_def.second)),
                 Some(NodeId(loop_def.end)),
+                start_to_chain,
                 &newest_level_loops,
                 &debug_node_ids,
                 segment_directionality,
@@ -1301,6 +1355,14 @@ fn main() {
                 id_to_node.clone()
             };
 
+            let start_to_chain = calculate_chains(
+                &id_to_node,
+                &node_to_neighbors,
+                &one_way_pairs,
+                opts.directional_segments,
+            );
+            eprintlntime!(start_time, "chains calculated");
+
             let start_to_loop: HashMap<(NodeId, NodeId), Loop> = lpo.loop_def_file
                 .as_ref()
                 .map(|ldf|
@@ -1308,6 +1370,7 @@ fn main() {
                         ldf.as_path(),
                         &id_to_node,
                         &node_to_neighbors,
+                        &start_to_chain,
                         &one_way_pairs,
                         &debug_node_ids,
                         opts.directional_segments,
@@ -1325,6 +1388,7 @@ fn main() {
                         start_node_id,
                         None,
                         None,
+                        &start_to_chain,
                         &start_to_loop,
                         &debug_node_ids,
                         opts.directional_segments,
