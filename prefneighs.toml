@@ -1,0 +1,45 @@
+[[preferred_neighbors]]
+# small Dörfelstraße loop: prefer continuing east
+base = 4698155069
+neighbor = 2208558404
+
+[[preferred_neighbors]]
+# large Dörfelstraße loop: prefer continuing on Aßmayergasse
+base = 4698155071
+neighbor = 1523533116
+
+[[preferred_neighbors]]
+# Stefan-Fadinger-Platz: continue toward Quellenstraße
+base = 4698210388
+neighbor = 2365898303
+
+[[preferred_neighbors]]
+# Augasse loop: prefer continuing north
+base = 4698802257
+neighbor = 2216232242
+
+[[preferred_neighbors]]
+# HLS loop: prefer continuing west
+base = 4698113275
+neighbor = 2515025345
+
+[[preferred_neighbors]]
+# Wexstraße: prefer continuing to Stromstraße and not Jägerstraße
+# (Transdanubia ;-))
+base = 4698077615
+neighbor = 2394764399
+
+[[preferred_neighbors]]
+# continue on Nussdorfer Straße instead of turning toward Franz-Josefs-Bhf
+base = 4698802249
+neighbor = 2296929369
+
+[[preferred_neighbors]]
+# prefer returning to Baden once we reach Philadelphiabrücke
+base = 248791816
+neighbor = 2432443174
+
+[[preferred_neighbors]]
+# Eichenstraße USTRAB exit: continue on Gürtel
+base = 4698908747
+neighbor = 2206792170

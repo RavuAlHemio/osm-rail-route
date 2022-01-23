@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use osmpbfreader::{Node, NodeId};
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,28 @@ pub struct LoopDefinition {
     pub start: i64,
     pub second: i64,
     pub end: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PreferredNeighbors {
+    pub preferred_neighbors: HashSet<PreferredNeighbor>,
+}
+impl PreferredNeighbors {
+    pub fn to_hash_map(&self) -> HashMap<NodeId, HashSet<NodeId>> {
+        let mut ret = HashMap::new();
+        for pair in &self.preferred_neighbors {
+            ret
+                .entry(NodeId(pair.base))
+                .or_insert_with(|| HashSet::new())
+                .insert(NodeId(pair.neighbor));
+        }
+        ret
+    }
+}
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct PreferredNeighbor {
+    pub base: i64,
+    pub neighbor: i64,
 }
 
 

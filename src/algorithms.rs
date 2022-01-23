@@ -32,6 +32,7 @@ fn whittle_down_neighbors(
     neighbors: &mut Vec<&Node>,
     prev_node_opt: Option<&Node>,
     one_way_pairs: &HashSet<(NodeId, NodeId)>,
+    preferred_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
     debug: bool
 ) {
     const MAX_CROSSING_BEARING_DIFF_DEG: f64 = 15.0;
@@ -42,6 +43,25 @@ fn whittle_down_neighbors(
     if neighbors.len() == 0 {
         if debug { eprintln!("  no neighbors?!"); }
         return;
+    }
+
+    if debug {
+        let neigh_ids: Vec<i64> = neighbors.iter().map(|n| n.id.0).collect();
+        eprintln!("  pre-sort neighbors: {:?}", neigh_ids);
+    }
+    // (stably) sort preferred neighbors last (so that they're taken first)
+    if let Some(my_preferred_neighbors) = preferred_neighbors.get(&base_node.id) {
+        neighbors.sort_by_cached_key(|neigh| {
+            if my_preferred_neighbors.contains(&neigh.id) {
+                1
+            } else {
+                0
+            }
+        });
+    }
+    if debug {
+        let neigh_ids: Vec<i64> = neighbors.iter().map(|n| n.id.0).collect();
+        eprintln!("  post-sort neighbors: {:?}", neigh_ids);
     }
 
     // allow anything if we don't know the previous node
@@ -154,6 +174,7 @@ pub fn calculate_chains<'a>(
     id_to_node: &'a HashMap<NodeId, &Node>,
     node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
     one_way_pairs: &HashSet<(NodeId, NodeId)>,
+    preferred_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
     directional_segments: bool,
 ) -> HashMap<(NodeId, NodeId), LengthPath<'a>> {
     let mut start_to_chain: HashMap<(NodeId, NodeId), LengthPath<'a>> = HashMap::new();
@@ -180,6 +201,7 @@ pub fn calculate_chains<'a>(
             &mut neighbors,
             None,
             one_way_pairs,
+            preferred_neighbors,
             false,
         );
 
@@ -228,6 +250,7 @@ pub fn calculate_chains<'a>(
                     &mut neighbors,
                     Some(prev_node),
                     one_way_pairs,
+                    preferred_neighbors,
                     false,
                 );
 
@@ -263,6 +286,7 @@ pub fn kinda_astar_search<'a>(
     id_to_node: &'a HashMap<NodeId, &Node>,
     node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
     one_way_pairs: &HashSet<(NodeId, NodeId)>,
+    preferred_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
     start_node_id: NodeId,
     dest_node_id: NodeId,
     debug_node_ids: &HashSet<NodeId>,
@@ -305,6 +329,7 @@ pub fn kinda_astar_search<'a>(
             &mut neighbors,
             prev_node_opt,
             one_way_pairs,
+            preferred_neighbors,
             debug_node_ids.contains(&path.current_node.id),
         );
         for neighbor in &neighbors {
@@ -341,6 +366,7 @@ pub fn shortest_paths<'a>(
     id_to_node: &'a HashMap<NodeId, &Node>,
     node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
     one_way_pairs: &HashSet<(NodeId, NodeId)>,
+    preferred_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
     start_node_id: NodeId,
     dest_nodes: &HashSet<NodeId>,
     debug_node_ids: &HashSet<NodeId>,
@@ -381,6 +407,7 @@ pub fn shortest_paths<'a>(
             &mut neighbors,
             path.current_segments.last().map(|ls| ls.start_node),
             one_way_pairs,
+            preferred_neighbors,
             debug_node_ids.contains(&path.current_node.id),
         );
 
@@ -414,6 +441,7 @@ pub fn longest_path_from<'a>(
     id_to_node: &'a HashMap<NodeId, &Node>,
     node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
     one_way_pairs: &HashSet<(NodeId, NodeId)>,
+    preferred_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
     start_node_id: NodeId,
     second_node_id_opt: Option<NodeId>,
     end_node_id_opt: Option<NodeId>,
@@ -503,6 +531,7 @@ pub fn longest_path_from<'a>(
             &mut neighbors,
             prev_node_opt,
             &one_way_pairs,
+            preferred_neighbors,
             debug_node_ids.contains(&path.current_node.id),
         );
 

@@ -19,7 +19,7 @@ use toml;
 
 use crate::algorithms::{calculate_chains, kinda_astar_search, longest_path_from, shortest_paths};
 use crate::geo::sphere_distance_meters;
-use crate::model::{LengthPath, Loop, LoopDefinitions};
+use crate::model::{LengthPath, Loop, LoopDefinitions, PreferredNeighbors};
 use crate::util::path_to_geojson;
 
 
@@ -29,6 +29,7 @@ struct Opts {
     #[clap(subcommand)] mode: OptsMode,
     #[clap(short = 'D', long, takes_value = true, multiple_occurrences = true)] pub debug_node_ids: Vec<i64>,
     #[clap(short, long)] pub directional_segments: bool,
+    #[clap(short = 'n', long)] pub preferred_neighbors: Option<PathBuf>,
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
 enum OptsMode {
@@ -55,7 +56,7 @@ struct LongestPathOpts {
     pub start_node_ids: Vec<i64>,
     #[clap(short = 'l', long)] pub loop_def_file: Option<PathBuf>,
     #[clap(short = 'p', long)] pub progress_file: Option<PathBuf>,
-    #[clap(short = 'e', long, default_value = "4096")] pub progress_each: usize,
+    #[clap(short = 'e', long, default_value = "8192")] pub progress_each: usize,
 }
 
 
@@ -197,12 +198,30 @@ macro_rules! eprintlntime {
     };
 }
 
+fn load_preferred_neighbors(pref_neighs_path_opt: Option<&Path>) -> HashMap<NodeId, HashSet<NodeId>> {
+    let pref_neighs_path = match pref_neighs_path_opt {
+        Some(pnp) => pnp,
+        None => return HashMap::new(),
+    };
+    let pref_neighs: PreferredNeighbors = {
+        let mut f = File::open(pref_neighs_path)
+            .expect("failed to open preferred neighbors file");
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)
+            .expect("failed to read preferred neighbors file");
+        toml::from_slice(&buf)
+            .expect("failed to parse preferred neighbors file")
+    };
+    pref_neighs.to_hash_map()
+}
+
 fn load_loops<'a>(
     loop_def_path: &Path,
     id_to_node: &'a HashMap<NodeId, &'a Node>,
     node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
     start_to_chain: &HashMap<(NodeId, NodeId), LengthPath<'a>>,
     one_way_pairs: &HashSet<(NodeId, NodeId)>,
+    preferred_neighbors: &HashMap<NodeId, HashSet<NodeId>>,
     debug_node_ids: &HashSet<NodeId>,
     segment_directionality: bool,
 ) -> HashMap<(NodeId, NodeId), Loop<'a>> {
@@ -225,6 +244,7 @@ fn load_loops<'a>(
                 &id_to_node,
                 &node_to_neighbors,
                 &one_way_pairs,
+                preferred_neighbors,
                 NodeId(loop_def.start),
                 Some(NodeId(loop_def.second)),
                 Some(NodeId(loop_def.end)),
@@ -326,6 +346,10 @@ fn main() {
     let (node_to_neighbors, one_way_pairs) = calculate_neighbors(&ways);
     eprintlntime!(start_time, "neighbors calculated");
 
+    let preferred_neighbors = load_preferred_neighbors(
+        opts.preferred_neighbors.as_ref().map(|pn| pn.as_path()),
+    );
+
     let geojson = match &opts.mode {
         OptsMode::Route(r) => {
             let start_fake_node = make_fake_node(r.start_lat, r.start_lon);
@@ -343,6 +367,7 @@ fn main() {
                 &id_to_node,
                 &node_to_neighbors,
                 &one_way_pairs,
+                &preferred_neighbors,
                 start_node.id,
                 dest_node.id,
                 &debug_node_ids,
@@ -371,6 +396,7 @@ fn main() {
                 &id_to_node,
                 &node_to_neighbors,
                 &one_way_pairs,
+                &preferred_neighbors,
                 start_node.id,
                 &stop_closest_node_ids,
                 &debug_node_ids,
@@ -424,6 +450,7 @@ fn main() {
                         &id_to_node,
                         &node_to_neighbors,
                         &one_way_pairs,
+                        &preferred_neighbors,
                         start_node_id,
                         &other_node_ids,
                         &debug_node_ids,
@@ -466,6 +493,7 @@ fn main() {
                 &id_to_node,
                 &node_to_neighbors,
                 &one_way_pairs,
+                &preferred_neighbors,
                 opts.directional_segments,
             );
             eprintlntime!(start_time, "chains calculated");
@@ -479,6 +507,7 @@ fn main() {
                         &node_to_neighbors,
                         &start_to_chain,
                         &one_way_pairs,
+                        &preferred_neighbors,
                         &debug_node_ids,
                         opts.directional_segments,
                     )
@@ -492,6 +521,7 @@ fn main() {
                         &id_to_node,
                         &node_to_neighbors,
                         &one_way_pairs,
+                        &preferred_neighbors,
                         start_node_id,
                         None,
                         None,
