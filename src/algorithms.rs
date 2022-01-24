@@ -504,10 +504,13 @@ pub fn longest_path_from<'a>(
                     if last_progress_length < longest_distance {
                         debug!("outputting progress at {}", longest_distance);
                         let geojson = path_to_geojson(lp.current_segments.iter());
-                        let f = File::create(prog_file)
-                            .expect("failed to open progress file");
-                        serde_json::to_writer_pretty(f, &geojson)
-                            .expect("failed to write progress file");
+                        {
+                            let f = File::create(prog_file)
+                                .expect("failed to open progress file");
+                            serde_json::to_writer_pretty(f, &geojson)
+                                .expect("failed to write progress file");
+                        }
+                        debug!("  progress output");
 
                         last_progress_length = longest_distance;
                     }
