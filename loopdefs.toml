@@ -96,12 +96,15 @@ start = 4698210385
 second = 2365898298
 end = 4698210388
 
-# currently deactivated:
-# Würtzlerstraße is shared with road traffic but tram goes against oneway
-#[levels_loops."Schlachthausgasse"]
-#start = 4698929204
-#second = 3177626967
-#end = 4698929209
+[levels_loops."Bruno-Marek-Allee"]
+start = 7009847833
+second = 8296367575
+end = 7009847835
+
+[levels_loops."Schlachthausgasse"]
+start = 4698929204
+second = 3177626967
+end = 4698929209
 
 [[levels_loops]]
 # next, forks of two loops
