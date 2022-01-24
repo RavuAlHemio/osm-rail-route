@@ -38,6 +38,7 @@ enum OptsMode {
     ShortestPaths(ShortestPathsOpts),
     LongestShortestPath,
     LongestPath(LongestPathOpts),
+    TotalWayLength,
 }
 #[derive(Clone, Debug, Parser, PartialEq)]
 struct RouteOpts {
@@ -561,6 +562,27 @@ fn main() {
             let longest_path = longest_path_opt
                 .expect("no path found");
             path_to_geojson(longest_path.current_segments.iter())
+        },
+        OptsMode::TotalWayLength => {
+            let mut total_length = 0.0;
+            for (base_node_id, neighbor_node_ids) in node_to_neighbors.iter() {
+                let base_node = id_to_node.get(base_node_id).unwrap();
+
+                for neighbor_node_id in neighbor_node_ids {
+                    // only count each path once => base node < neighbor node
+                    if base_node.id > *neighbor_node_id {
+                        continue;
+                    }
+
+                    let neighbor_node = id_to_node.get(neighbor_node_id).unwrap();
+                    let node_dist = sphere_distance_meters(
+                        base_node.lat(), base_node.lon(),
+                        neighbor_node.lat(), neighbor_node.lon(),
+                    );
+                    total_length += node_dist;
+                }
+            }
+            serde_json::json!(total_length)
         },
         _ => unreachable!(),
     };
