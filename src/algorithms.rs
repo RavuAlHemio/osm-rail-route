@@ -3,6 +3,7 @@ use std::f64::consts::PI;
 use std::fs::File;
 use std::path::Path;
 
+use log::debug;
 use osmpbfreader::{Node, NodeId};
 
 use crate::collections::NodePairSet;
@@ -23,7 +24,7 @@ fn remove_one_way_neighbors(
     );
     if debug {
         let neigh_ids: Vec<i64> = neighbors.iter().map(|n| n.id.0).collect();
-        eprintln!("  after removing against-one-ways: {:?}", neigh_ids);
+        debug!("  after removing against-one-ways: {:?}", neigh_ids);
     }
 }
 
@@ -38,16 +39,16 @@ fn whittle_down_neighbors(
     const MAX_CROSSING_BEARING_DIFF_DEG: f64 = 15.0;
     const MAX_UNMARKED_BEARING_DIFF_DEG: f64 = 30.0;
 
-    if debug { eprintln!("checking {}", base_node.id.0); }
+    if debug { debug!("checking {}", base_node.id.0); }
 
     if neighbors.len() == 0 {
-        if debug { eprintln!("  no neighbors?!"); }
+        if debug { debug!("  no neighbors?!"); }
         return;
     }
 
     if debug {
         let neigh_ids: Vec<i64> = neighbors.iter().map(|n| n.id.0).collect();
-        eprintln!("  pre-sort neighbors: {:?}", neigh_ids);
+        debug!("  pre-sort neighbors: {:?}", neigh_ids);
     }
     // (stably) sort preferred neighbors last (so that they're taken first)
     if let Some(my_preferred_neighbors) = preferred_neighbors.get(&base_node.id) {
@@ -61,24 +62,24 @@ fn whittle_down_neighbors(
     }
     if debug {
         let neigh_ids: Vec<i64> = neighbors.iter().map(|n| n.id.0).collect();
-        eprintln!("  post-sort neighbors: {:?}", neigh_ids);
+        debug!("  post-sort neighbors: {:?}", neigh_ids);
     }
 
     // allow anything if we don't know the previous node
     let prev_node = match prev_node_opt {
         Some(pn) => pn,
         None => {
-            if debug { eprintln!("  allowing everything (except going against one-ways)"); }
+            if debug { debug!("  allowing everything (except going against one-ways)"); }
             remove_one_way_neighbors(base_node, neighbors, one_way_pairs, debug);
             return;
         },
     };
 
-    if debug { eprintln!("  previous: {}", prev_node.id.0); }
+    if debug { debug!("  previous: {}", prev_node.id.0); }
 
     if neighbors.len() == 1 {
         // dead end; nowhere to go
-        if debug { eprintln!("  dead end"); }
+        if debug { debug!("  dead end"); }
         neighbors.clear();
         return;
     }
@@ -86,7 +87,7 @@ fn whittle_down_neighbors(
     if neighbors.len() == 2 {
         // pass-through node; remove the previous node
         neighbors.retain(|n| n.id != prev_node.id);
-        if debug { eprintln!("  pass-through"); }
+        if debug { debug!("  pass-through"); }
         remove_one_way_neighbors(base_node, neighbors, one_way_pairs, debug);
         return;
     }
@@ -143,7 +144,7 @@ fn whittle_down_neighbors(
             .min_by(|(bd1, _n1), (bd2, _n2)| bd1.partial_cmp(bd2).unwrap())
             .unwrap();
 
-        if debug { eprintln!("  crossing; keeping best match"); }
+        if debug { debug!("  crossing; keeping best match"); }
 
         neighbors.retain(|n| n.id == bearing_neighbor.id);
         remove_one_way_neighbors(base_node, neighbors, one_way_pairs, debug);
@@ -153,7 +154,7 @@ fn whittle_down_neighbors(
     // heuristic for switches and unmarked intersecting ways: upper limit
     if debug {
         let neigh_ids: Vec<i64> = neighbors.iter().map(|n| n.id.0).collect();
-        eprintln!("  switch/intersection; keeping everything < {}° (before: {:?})", MAX_UNMARKED_BEARING_DIFF_DEG, neigh_ids);
+        debug!("  switch/intersection; keeping everything < {}° (before: {:?})", MAX_UNMARKED_BEARING_DIFF_DEG, neigh_ids);
     }
     neighbors.retain(|n| {
         let neigh_bearing = bearing(base_node, n);
@@ -163,7 +164,7 @@ fn whittle_down_neighbors(
 
     if debug {
         let neigh_ids: Vec<i64> = neighbors.iter().map(|n| n.id.0).collect();
-        eprintln!("    after: {:?}", neigh_ids);
+        debug!("    after: {:?}", neigh_ids);
     }
 
     remove_one_way_neighbors(base_node, neighbors, one_way_pairs, debug);
@@ -416,7 +417,6 @@ pub fn shortest_paths<'a>(
             let mut new_visited_segments = path.visited_segments.clone();
             if !new_visited_segments.insert(path.current_node.id, neighbor.id) {
                 // yes
-                //eprintln!("    I've gone this path before");
                 continue;
             }
 
@@ -485,7 +485,7 @@ pub fn longest_path_from<'a>(
         if update_longest {
             if longest_distance < path.total_distance {
                 if path.total_distance - longest_distance > 200.0 {
-                    eprintln!("new maximum length: {}", path.total_distance);
+                    debug!("new maximum length: {}", path.total_distance);
                 }
                 longest_distance = path.total_distance;
                 longest_path = Some(path.clone());
@@ -502,7 +502,7 @@ pub fn longest_path_from<'a>(
             if progress_counter >= progress_each {
                 if let Some(lp) = &longest_path {
                     if last_progress_length < longest_distance {
-                        eprintln!("outputting progress at {}", longest_distance);
+                        debug!("outputting progress at {}", longest_distance);
                         let geojson = path_to_geojson(lp.current_segments.iter());
                         let f = File::create(prog_file)
                             .expect("failed to open progress file");
@@ -551,7 +551,7 @@ pub fn longest_path_from<'a>(
                 // yes; append it if possible
                 if let Some(path_with_loop) = path.extending_by_path(&lp.length_path) {
                     if debug_node_ids.contains(&path.current_node.id) {
-                        eprintln!("appending loop {:?}", lp.name);
+                        debug!("appending loop {:?}", lp.name);
                     }
                     paths.push(path_with_loop);
                     continue;
@@ -563,7 +563,7 @@ pub fn longest_path_from<'a>(
                 // yes; append it if possible
                 if let Some(path_with_chain) = path.extending_by_path(chain) {
                     if debug_node_ids.contains(&path.current_node.id) {
-                        eprintln!(
+                        debug!(
                             "appending chain from {:?} to {:?}",
                             chain.current_segments.first().unwrap().start_node.id,
                             chain.current_segments.last().unwrap().end_node.id,
@@ -575,7 +575,7 @@ pub fn longest_path_from<'a>(
             }
 
             if debug_node_ids.contains(&path.current_node.id) {
-                eprintln!(
+                debug!(
                     "non-chain neighbor! {:?} -> {:?}",
                     path.current_node.id, neighbor.id,
                 );

@@ -2,6 +2,7 @@ mod algorithms;
 mod collections;
 mod geo;
 mod model;
+mod timing_logger;
 mod util;
 
 
@@ -10,9 +11,9 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
 
 use clap::Parser;
+use log::{debug, info};
 use osmpbfreader::{Node, NodeId, OsmPbfReader, Tags, Way};
 use rayon::prelude::*;
 use toml;
@@ -189,16 +190,6 @@ fn dump_ways(id_to_node: &HashMap<NodeId, &Node>, ways: &[&Way]) {
     println!("{}", all_json_string);
 }
 
-macro_rules! eprintlntime {
-    ($start_time:tt) => {
-        eprintln!("[{:.6}]", (Instant::now() - $start_time).as_secs_f64());
-    };
-    ($start_time:tt, $($arg : tt) *) => {
-        eprint!("[{:.6}] ", (Instant::now() - $start_time).as_secs_f64());
-        eprintln!($($arg)*);
-    };
-}
-
 fn load_preferred_neighbors(
     pref_neighs_path_opt: Option<&Path>,
     node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
@@ -262,7 +253,7 @@ fn load_loops<'a>(
     for level_loops in &loop_defs.levels_loops {
         let mut this_level_loops = HashMap::new();
         for (loop_name, loop_def) in level_loops.iter() {
-            eprintln!("calculating loop {}", loop_name);
+            debug!("calculating loop {}", loop_name);
             let longest_loop_opt = longest_path_from(
                 &id_to_node,
                 &node_to_neighbors,
@@ -305,7 +296,7 @@ fn main() {
         .map(|dnid| NodeId(*dnid))
         .collect();
 
-    let start_time = Instant::now();
+    timing_logger::TimingLogger::init(log::Level::Debug);
 
     let railways = {
         let f = File::open(&opts.osm_path)
@@ -327,7 +318,7 @@ fn main() {
             )
             .expect("failed to obtain railways")
     };
-    eprintlntime!(start_time, "railways loaded");
+    info!("railways loaded");
 
     let id_to_node: HashMap<NodeId, &Node> = railways.values()
         .filter_map(|o| o.node())
@@ -356,10 +347,10 @@ fn main() {
             ).unwrap_or(false)
         )
         .collect();
-    eprintlntime!(start_time, "nodes and ways extracted");
+    info!("nodes and ways extracted");
 
     remove_invalid_ways(&id_to_node, &mut ways);
-    eprintlntime!(start_time, "invalid ways removed");
+    info!("invalid ways removed");
 
     if let OptsMode::DumpWays = &opts.mode {
         dump_ways(&id_to_node, &ways);
@@ -367,7 +358,7 @@ fn main() {
     }
 
     let (node_to_neighbors, one_way_pairs) = calculate_neighbors(&ways);
-    eprintlntime!(start_time, "neighbors calculated");
+    info!("neighbors calculated");
 
     let preferred_neighbors = load_preferred_neighbors(
         opts.preferred_neighbors.as_ref().map(|pn| pn.as_path()),
@@ -385,8 +376,8 @@ fn main() {
             let dest_node = find_closest_node(&dest_fake_node, way_nodes.iter().map(|n| *n))
                 .expect("no destination node found");
 
-            eprintlntime!(start_time, "finding path from {:?}", start_node);
-            eprintlntime!(start_time, "finding path to {:?}", dest_node);
+            info!("finding path from {:?}", start_node);
+            info!("finding path to {:?}", dest_node);
             let path_opt = kinda_astar_search(
                 &id_to_node,
                 &node_to_neighbors,
@@ -397,12 +388,12 @@ fn main() {
                 &debug_node_ids,
                 opts.directional_segments,
             );
-            eprintlntime!(start_time, "search completed");
+            info!("search completed");
             let path = match path_opt {
                 Some(p) => p,
                 None => panic!("no path found!"),
             };
-            eprintlntime!(start_time, "path has total distance of {}", path.total_distance);
+            info!("path has total distance of {}", path.total_distance);
 
             path_to_geojson(path.to_segments().iter().map(|ps| *ps))
         },
@@ -415,7 +406,7 @@ fn main() {
             let start_fake_node = make_fake_node(sp.start_lat, sp.start_lon);
             let start_node = find_closest_node(&start_fake_node, way_nodes.iter().map(|n| *n))
                 .expect("no start node found");
-            eprintlntime!(start_time, "finding shortest paths from {:?}", start_node);
+            info!("finding shortest paths from {:?}", start_node);
             let foundlings = shortest_paths(
                 &id_to_node,
                 &node_to_neighbors,
@@ -426,7 +417,7 @@ fn main() {
                 &debug_node_ids,
                 opts.directional_segments,
             );
-            eprintlntime!(start_time, "search completed");
+            info!("search completed");
 
             let geoways: Vec<serde_json::Value> = foundlings
                 .iter()
@@ -464,7 +455,7 @@ fn main() {
             let longest_shortest_path_opt = stop_closest_node_ids.par_iter()
                 .inspect(|_| {
                     let counter = started_counter.fetch_add(1, Ordering::SeqCst);
-                    eprintlntime!(start_time, "started item {}/{}", counter, stop_closest_node_ids.len());
+                    info!("started item {}/{}", counter, stop_closest_node_ids.len());
                 })
                 .filter_map(|&start_node_id| {
                     let mut other_node_ids = stop_closest_node_ids.clone();
@@ -480,7 +471,7 @@ fn main() {
                         &debug_node_ids,
                         opts.directional_segments,
                     );
-                    eprintlntime!(start_time, "{:?}: {} other IDs, {} paths found", start_node_id, other_node_ids.len(), foundlings.len());
+                    info!("{:?}: {} other IDs, {} paths found", start_node_id, other_node_ids.len(), foundlings.len());
                     foundlings
                         .drain()
                         .map(|(_i, p)| p)
@@ -494,7 +485,7 @@ fn main() {
 
             let longest_shortest_path_detail = longest_shortest_path_opt
                 .expect("no path found");
-            eprintlntime!(start_time, "done! longest shortest path distance: {}", longest_shortest_path_detail.total_distance);
+            info!("done! longest shortest path distance: {}", longest_shortest_path_detail.total_distance);
             path_to_geojson(longest_shortest_path_detail.current_segments.iter())
         },
         OptsMode::LongestPath(lpo) => {
@@ -520,7 +511,7 @@ fn main() {
                 &preferred_neighbors,
                 opts.directional_segments,
             );
-            eprintlntime!(start_time, "chains calculated");
+            info!("chains calculated");
 
             let start_to_loop: HashMap<(NodeId, NodeId), Loop> = lpo.loop_def_file
                 .as_ref()
@@ -540,7 +531,7 @@ fn main() {
 
             let longest_path_opt = start_id_to_node.keys()
                 .filter_map(|&start_node_id| {
-                    eprintlntime!(start_time, "calculating longest path from {:?}", start_node_id);
+                    info!("calculating longest path from {:?}", start_node_id);
                     longest_path_from(
                         &id_to_node,
                         &node_to_neighbors,
