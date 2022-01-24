@@ -8,6 +8,12 @@ export module TramRoute {
     let theMap: leaflet.Map;
     let segmentSlice: [number, number]|null = null;
 
+    const DEFAULT_CENTER: [number, number] = [48.2083537, 16.3725042];
+    const DEFAULT_ZOOM: number = 12;
+    const INTEGER_REGEX_STR = '(?:0|[1-9][0-9]+)';
+    const FLOAT_REGEX_STR = '(?:(?:0|[1-9][0-9]+)(?:[.][0-9]+)?)';
+    const MAP_FRAG_REGEX = new RegExp(`map=(${INTEGER_REGEX_STR})/(${FLOAT_REGEX_STR})/(${FLOAT_REGEX_STR})`);
+
     export function initializeMap(): void {
         // get the name of the map
         let queryParams = new URLSearchParams(window.location.search);
@@ -56,9 +62,17 @@ export module TramRoute {
         let layers: leaflet.Layer[] = baseLayers.map(nameAndLayer => nameAndLayer[1]);
         layers.push(trackLayer);
 
+        let center = DEFAULT_CENTER;
+        let zoom = DEFAULT_ZOOM;
+        let map_match = MAP_FRAG_REGEX.exec(window.location.hash);
+        if (map_match !== null) {
+            zoom = +map_match[1];
+            center = [+map_match[2], +map_match[3]];
+        }
+
         theMap = leaflet.map("the-map", {
-            center: [48.2083537, 16.3725042],
-            zoom: 12,
+            center: center,
+            zoom: zoom,
             layers: layers,
         });
         let baseMaps: any = {};
@@ -70,6 +84,8 @@ export module TramRoute {
         };
         let layerControl = leaflet.control.layers(baseMaps, overlayMaps);
         layerControl.addTo(theMap);
+        theMap.addEventListener("zoomend", mapSliceChanged);
+        theMap.addEventListener("moveend", mapSliceChanged);
     }
 
     function obtainBaseLayers(): [string, leaflet.TileLayer.Provider][] {
@@ -133,6 +149,13 @@ export module TramRoute {
                 }
                 break;
         }
+    }
+
+    function mapSliceChanged() {
+        let center = theMap.getCenter();
+        let zoomLevel = theMap.getZoom();
+
+        window.location.hash = `#map=${zoomLevel}/${center.lat.toFixed(5)}/${center.lng.toFixed(5)}`;
     }
 }
 
