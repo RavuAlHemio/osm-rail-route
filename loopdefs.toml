@@ -107,8 +107,8 @@ end = 4698210388
 # next, forks of two loops
 
 [levels_loops."Grinzing & Hohe Warte"]
-start = 4698802245
-second = 2296929466
+start = 4698802242
+second = 2296929508
 end = 2296929347
 
 [levels_loops."Strebersdorf & Stammersdorf"]
