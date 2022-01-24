@@ -198,7 +198,10 @@ macro_rules! eprintlntime {
     };
 }
 
-fn load_preferred_neighbors(pref_neighs_path_opt: Option<&Path>) -> HashMap<NodeId, HashSet<NodeId>> {
+fn load_preferred_neighbors(
+    pref_neighs_path_opt: Option<&Path>,
+    node_to_neighbors: &HashMap<NodeId, BTreeSet<NodeId>>,
+) -> HashMap<NodeId, HashSet<NodeId>> {
     let pref_neighs_path = match pref_neighs_path_opt {
         Some(pnp) => pnp,
         None => return HashMap::new(),
@@ -212,7 +215,26 @@ fn load_preferred_neighbors(pref_neighs_path_opt: Option<&Path>) -> HashMap<Node
         toml::from_slice(&buf)
             .expect("failed to parse preferred neighbors file")
     };
-    pref_neighs.to_hash_map()
+    let pref_neighs_hash_map = pref_neighs.to_hash_map();
+    for (base_node_id, neighbor_node_ids) in &pref_neighs_hash_map {
+        let base_neighs = match node_to_neighbors.get(base_node_id) {
+            Some(bns) => bns,
+            None => panic!(
+                "preferred neighbors failed consistency check: node {:?} does not have neighbors!",
+                base_node_id,
+            ),
+        };
+        for neighbor_node_id in neighbor_node_ids {
+            if !base_neighs.contains(neighbor_node_id) {
+                panic!(
+                    "preferred neighbors failed consistency check: node {:?} does not have a neighbor {:?}!",
+                    base_node_id,
+                    neighbor_node_id,
+                );
+            }
+        }
+    }
+    pref_neighs_hash_map
 }
 
 fn load_loops<'a>(
@@ -348,6 +370,7 @@ fn main() {
 
     let preferred_neighbors = load_preferred_neighbors(
         opts.preferred_neighbors.as_ref().map(|pn| pn.as_path()),
+        &node_to_neighbors,
     );
 
     let geojson = match &opts.mode {
