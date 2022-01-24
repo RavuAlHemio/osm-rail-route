@@ -18,10 +18,10 @@ neighbor = 2365898303
 base = 4698802257
 neighbor = 2216232242
 
-[[preferred_neighbors]]
-# HLS loop: prefer continuing west
-base = 4698113275
-neighbor = 2515025345
+#[[preferred_neighbors]]
+## HLS loop: prefer continuing west
+#base = 4698113275
+#neighbor = 2515025345
 
 [[preferred_neighbors]]
 # Wexstraße: prefer continuing to Stromstraße and not Jägerstraße
@@ -29,30 +29,30 @@ neighbor = 2515025345
 base = 4698077615
 neighbor = 2394764399
 
-[[preferred_neighbors]]
-# continue on Nussdorfer Straße instead of turning toward Franz-Josefs-Bhf
-base = 4698802249
-neighbor = 2296929369
+#[[preferred_neighbors]]
+## continue on Nussdorfer Straße instead of turning toward Franz-Josefs-Bhf
+#base = 4698802263
+#neighbor = 2296929369
 
 [[preferred_neighbors]]
 # prefer returning to Baden once we reach Philadelphiabrücke
 base = 248791816
 neighbor = 2432443174
 
-[[preferred_neighbors]]
-# Eichenstraße USTRAB exit: continue on Gürtel
-base = 4698908747
-neighbor = 2206792170
+#[[preferred_neighbors]]
+## Eichenstraße USTRAB exit: continue on Gürtel
+#base = 4698908747
+#neighbor = 2206792170
 
 [[preferred_neighbors]]
 # Südbahnhof loop: continue toward Absberggasse
 base = 4698929213
 neighbor = 4071153244
 
-[[preferred_neighbors]]
-# Josefstädter Straße loop: continue into city
-base = 4698819297
-neighbor = 2423362076
+#[[preferred_neighbors]]
+## Josefstädter Straße loop: continue into city
+#base = 4698819297
+#neighbor = 2423362076
 
 [[preferred_neighbors]]
 # Westbahnhof loop: try continuing north on the Gürtel, towards the Burggasse loop
@@ -68,3 +68,68 @@ neighbor = 2510778330
 # Ring: turn towards Börsegasse
 base = 4698994108
 neighbor = 2471325577
+
+[[preferred_neighbors]]
+# FAV: try looping through when going west on Quellenstraße
+base = 4698210379
+neighbor = 2309679655
+
+[[preferred_neighbors]]
+# Raffaelschleife: don't
+base = 4698077656
+neighbor = 8892413401
+
+[[preferred_neighbors]]
+# USTRAB Matziplatzi from west: continue in USTRAB
+base = 4698908752
+neighbor = 2206791817
+
+[[preferred_neighbors]]
+# Karlsplatz: loop back
+base = 4698994080
+neighbor = 271334055
+
+[[preferred_neighbors]]
+# Karlsplatz: loop back again
+base = 4698994068
+neighbor = 277843012
+
+[[preferred_neighbors]]
+# USTRAB Matziplatzi from east: leave towards Favoriten
+base = 4698908753
+neighbor = 2565364228
+
+#[[preferred_neighbors]]
+## Josefstädter Straße: go via Sanettystraße
+#base = 4698819305
+#neighbor = 293267450
+
+[[preferred_neighbors]]
+# Blindengasse: continue south
+base = 4698819313
+neighbor = 1517229830
+
+[[preferred_neighbors]]
+# Westbahnhof: return through Blindengasse, part 1
+base = 4698900515
+neighbor = 4698900516
+
+[[preferred_neighbors]]
+# Westbahnhof: return through Blindengasse, part 2
+base = 4698900516
+neighbor = 8892461648
+
+[[preferred_neighbors]]
+# Hauptbahnhof: coming from south, don't turn west
+base = 4698929218
+neighbor = 1600410924
+
+[[preferred_neighbors]]
+# Hauptbahnhof: coming from south, continue east
+base = 4698929219
+neighbor = 2360813588
+
+[[preferred_neighbors]]
+# Schlachthausgasse: continue towards Gürtel instead of turning to Kaiserebersdorf
+base = 4698929209
+neighbor = 9070329203
