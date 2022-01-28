@@ -39,6 +39,52 @@ neighbor = 2394764399
 base = 248791816
 neighbor = 2432443174
 
+# BEGIN SECTION: Eichenstraße USTRAB exit: loop via Stadthalle
+# Eichenstraße USTRAB exit -> Gürtel -> bypass Westbahnhof loop
+# -> bypass Märzstraße curve -> loop at Stadthalle
+
+[[preferred_neighbors]]
+base = 4698908747
+neighbor = 2206792170
+
+[[preferred_neighbors]]
+base = 83517336
+neighbor = 2853613157
+
+[[preferred_neighbors]]
+base = 4698900514
+neighbor = 2360766431
+
+[[preferred_neighbors]]
+base = 4698831123
+neighbor = 8581980023
+
+[[preferred_neighbors]]
+base = 4698831135
+neighbor = 2510778330
+
+[[preferred_neighbors]]
+base = 4698900502
+neighbor = 2411881884
+
+[[preferred_neighbors]]
+base = 4698900509
+neighbor = 4698900508
+
+[[preferred_neighbors]]
+base = 4698900508
+neighbor = 2208875379
+
+[[preferred_neighbors]]
+base = 4698900501
+neighbor = 2440737114
+
+[[preferred_neighbors]]
+base = 4698908748
+neighbor = 2206791918
+
+# END SECTION: Eichenstraße USTRAB exit: loop via Stadthalle
+
 #[[preferred_neighbors]]
 ## Eichenstraße USTRAB exit: continue on Gürtel
 #base = 4698908747
